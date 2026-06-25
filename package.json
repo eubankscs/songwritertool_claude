@@ -1,0 +1,43 @@
+{
+  "name": "songwritertool_claude",
+  "version": "1.0.0",
+  "description": "This is a claude code enerated version of a songwriting tool designed by specification and requirements discussions with ChatGPT",
+  "main": "dist/main/main.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build:main": "tsc -p tsconfig.json",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "dev:renderer": "vite --config vite.config.ts",
+    "dev": "NODE_ENV=development npm run build:main && electron .",
+    "test": "echo \"No tests in Phase 1\" && exit 0",
+    "verify-schema": "node scripts/verify-schema.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:41729/git/eubankscs/songwritertool_claude"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^6.0.3",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "uuid": "^14.0.1"
+  }
+}
