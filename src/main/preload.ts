@@ -22,10 +22,13 @@ contextBridge.exposeInMainWorld('songwriterAPI', {
     softDelete: (id: string) => ipcRenderer.invoke('songs:softDelete', id),
     touchLastOpened: (id: string) => ipcRenderer.invoke('songs:touchLastOpened', id),
     getById: (id: string) => ipcRenderer.invoke('songs:getById', id),
+    persistWorkingSync: (payload: unknown) => ipcRenderer.sendSync('songs:persistWorkingSync', payload),
   },
   songVersions: {
     getBySong: (songId: string) => ipcRenderer.invoke('songVersions:getBySong', songId),
     upsertWorking: (songId: string) => ipcRenderer.invoke('songVersions:upsertWorking', songId),
+    upsertSaved: (songId: string) => ipcRenderer.invoke('songVersions:upsertSaved', songId),
+    deleteWorking: (songId: string) => ipcRenderer.invoke('songVersions:deleteWorking', songId),
   },
   contentBlocks: {
     getByVersion: (versionId: string) => ipcRenderer.invoke('contentBlocks:getByVersion', versionId),
@@ -33,5 +36,12 @@ contextBridge.exposeInMainWorld('songwriterAPI', {
       versionId: string,
       blocks: Array<{ type: string; content: string | null; position: number }>
     ) => ipcRenderer.invoke('contentBlocks:replaceAll', versionId, blocks),
+  },
+  arrangementMarkers: {
+    getByVersion: (versionId: string) => ipcRenderer.invoke('arrangementMarkers:getByVersion', versionId),
+    replaceAll: (
+      versionId: string,
+      markers: Array<{ targetPosition: string; displayMode: string; text: string }>
+    ) => ipcRenderer.invoke('arrangementMarkers:replaceAll', versionId, markers),
   },
 });
