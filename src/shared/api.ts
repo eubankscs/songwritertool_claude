@@ -27,6 +27,7 @@ export interface SongwriterAPI {
     getRecentlyOpened(limit?: number): Promise<RecentSong[]>;
     getByProject(projectId: string): Promise<Song[]>;
     getDeleted(): Promise<Song[]>;
+    getAllActive(): Promise<RecentSong[]>;
     create(title: string, projectId: string): Promise<Song>;
     rename(id: string, title: string): Promise<void>;
     getNextUntitledName(): Promise<string>;
@@ -34,6 +35,15 @@ export interface SongwriterAPI {
     touchLastOpened(id: string): Promise<void>;
     getById(id: string): Promise<Song | undefined>;
     persistWorkingSync(payload: PersistWorkingSyncPayload): { success: boolean; versionId?: string };
+    purgeOldDeleted(): Promise<void>;
+    permanentlyDelete(songId: string): Promise<void>;
+    restore(songId: string, targetProjectId: string): Promise<void>;
+    restorePermanent(songId: string, targetProjectId: string): Promise<void>;
+    restoreAsVariant(originalSongId: string, newTitle: string, targetProjectId: string): Promise<void>;
+    checkTitleInProject(title: string, projectId: string, excludeId?: string): Promise<boolean>;
+    moveToProject(songId: string, targetProjectId: string): Promise<void>;
+    createVariant(originalSongId: string, newTitle: string, targetProjectId: string): Promise<void>;
+    saveAsVariant(originalSongId: string, newTitle: string, targetProjectId: string): Promise<Song | undefined>;
   };
   songVersions: {
     getBySong(songId: string): Promise<SongVersion[]>;

@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../database/db';
 import { ProjectRepository } from '../repositories/projectRepository';
 import { SongRepository } from '../repositories/songRepository';
@@ -10,6 +11,46 @@ import { AnnotationRepository } from '../repositories/annotationRepository';
 import { TagRepository } from '../repositories/tagRepository';
 import { ReviewQueueRepository } from '../repositories/reviewQueueRepository';
 import type { ContentBlock, ContentBlockType, ArrangementMarkerDisplayMode, NoteType } from '../../shared/schema';
+import type Database from 'better-sqlite3';
+
+function copyVersionContent(db: Database.Database, fromVersionId: string, toVersionId: string): void {
+  const oldBlocks = db.prepare('SELECT * FROM content_blocks WHERE versionId = ? ORDER BY position').all(fromVersionId) as ContentBlock[];
+  const idMap = new Map<string, string>();
+  for (const b of oldBlocks) {
+    const newId = uuidv4();
+    idMap.set(b.id, newId);
+    db.prepare('INSERT INTO content_blocks (id, versionId, type, content, position) VALUES (?, ?, ?, ?, ?)')
+      .run(newId, toVersionId, b.type, b.content, b.position);
+  }
+  const oldMarkers = db.prepare('SELECT * FROM arrangement_markers WHERE versionId = ?').all(fromVersionId) as Array<{ id: string; versionId: string; targetPosition: string; displayMode: string; text: string }>;
+  for (const m of oldMarkers) {
+    let newTarget = m.targetPosition;
+    if (m.displayMode === 'inline') {
+      const colon = m.targetPosition.lastIndexOf(':');
+      if (colon >= 0) {
+        const oldBlockId = m.targetPosition.substring(0, colon);
+        const offset = m.targetPosition.substring(colon);
+        const newBlockId = idMap.get(oldBlockId);
+        if (newBlockId) newTarget = newBlockId + offset;
+      }
+    }
+    db.prepare('INSERT INTO arrangement_markers (id, versionId, targetPosition, displayMode, text) VALUES (?, ?, ?, ?, ?)')
+      .run(uuidv4(), toVersionId, newTarget, m.displayMode, m.text);
+  }
+}
+
+function purgeSong(db: Database.Database, songId: string): void {
+  const versions = db.prepare('SELECT id FROM song_versions WHERE songId = ?').all(songId) as Array<{ id: string }>;
+  for (const v of versions) {
+    db.prepare('DELETE FROM arrangement_markers WHERE versionId = ?').run(v.id);
+    db.prepare('DELETE FROM content_blocks WHERE versionId = ?').run(v.id);
+  }
+  db.prepare('DELETE FROM song_versions WHERE songId = ?').run(songId);
+  db.prepare('DELETE FROM review_queue WHERE songId = ?').run(songId);
+  db.prepare('DELETE FROM annotations WHERE songId = ?').run(songId);
+  db.prepare('DELETE FROM notes WHERE songId = ?').run(songId);
+  db.prepare('DELETE FROM songs WHERE id = ?').run(songId);
+}
 
 function getRepos() {
   const db = getDb();
@@ -334,5 +375,160 @@ export function registerIpcHandlers(): void {
   });
   ipcMain.handle('reviewQueue:ignore', (_event, id: string) => {
     new ReviewQueueRepository(getDb()).ignore(id);
+  });
+
+  // ── Phase 5: Delete / Restore / Variants / Move ───────────────────────────
+
+  ipcMain.handle('songs:getAllActive', () => {
+    const db = getDb();
+    const songs = new SongRepository(db).getAllActive();
+    const projects = new ProjectRepository(db);
+    return songs.map(s => ({ ...s, containerName: projects.getById(s.projectId)?.name ?? 'Unassigned Songs' }));
+  });
+
+  ipcMain.handle('songs:purgeOldDeleted', () => {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const old = db.prepare("SELECT id FROM songs WHERE deletedOn IS NOT NULL AND deletedOn < ?").all(cutoff) as Array<{ id: string }>;
+    db.transaction(() => { for (const { id } of old) purgeSong(db, id); })();
+  });
+
+  ipcMain.handle('songs:permanentlyDelete', (_event, songId: string) => {
+    const db = getDb();
+    db.transaction(() => purgeSong(db, songId))();
+  });
+
+  ipcMain.handle('songs:restore', (_event, songId: string, targetProjectId: string) => {
+    new SongRepository(getDb()).restore(songId, targetProjectId);
+  });
+
+  ipcMain.handle('songs:restorePermanent', (_event, songId: string, targetProjectId: string) => {
+    const db = getDb();
+    const versions = new SongVersionRepository(db);
+    const cbRepo = new ContentBlockRepository(db);
+    const amRepo = new ArrangementMarkerRepository(db);
+    db.transaction(() => {
+      const working = versions.getByType(songId, 'working');
+      const saved = versions.getByType(songId, 'saved');
+      if (working && saved) {
+        amRepo.deleteByVersion(saved.id);
+        cbRepo.deleteByVersion(saved.id);
+        copyVersionContent(db, working.id, saved.id);
+        amRepo.deleteByVersion(working.id);
+        cbRepo.deleteByVersion(working.id);
+        versions.delete(working.id);
+      } else if (working && !saved) {
+        db.prepare("UPDATE song_versions SET type = 'saved' WHERE id = ?").run(working.id);
+      }
+      new SongRepository(db).restore(songId, targetProjectId);
+    })();
+  });
+
+  ipcMain.handle('songs:restoreAsVariant', (_event, originalSongId: string, newTitle: string, targetProjectId: string) => {
+    const db = getDb();
+    const versions = new SongVersionRepository(db);
+    const cbRepo = new ContentBlockRepository(db);
+    const amRepo = new ArrangementMarkerRepository(db);
+    const songs = new SongRepository(db);
+    db.transaction(() => {
+      const working = versions.getByType(originalSongId, 'working');
+      if (!working) return;
+      const newSong = songs.create(newTitle, targetProjectId);
+      const newVersion = versions.create(newSong.id, 'saved', working.capo, working.concertKey);
+      copyVersionContent(db, working.id, newVersion.id);
+      amRepo.deleteByVersion(working.id);
+      cbRepo.deleteByVersion(working.id);
+      versions.delete(working.id);
+      songs.restore(originalSongId, songs.getById(originalSongId)?.originalProjectId ?? targetProjectId);
+    })();
+  });
+
+  ipcMain.handle('songs:checkTitleInProject', (_event, title: string, projectId: string, excludeId?: string) => {
+    return new SongRepository(getDb()).titleExistsInProject(title, projectId, excludeId);
+  });
+
+  ipcMain.handle('songs:moveToProject', (_event, songId: string, targetProjectId: string) => {
+    const db = getDb();
+    const songs = new SongRepository(db);
+    const versions = new SongVersionRepository(db);
+    const cbRepo = new ContentBlockRepository(db);
+    const amRepo = new ArrangementMarkerRepository(db);
+    db.transaction(() => {
+      const working = versions.getByType(songId, 'working');
+      if (working) {
+        const saved = versions.getByType(songId, 'saved');
+        if (saved) {
+          amRepo.deleteByVersion(saved.id);
+          cbRepo.deleteByVersion(saved.id);
+          copyVersionContent(db, working.id, saved.id);
+        } else {
+          db.prepare("UPDATE song_versions SET type = 'saved' WHERE id = ?").run(working.id);
+        }
+        if (working) {
+          const w = versions.getByType(songId, 'working');
+          if (w) {
+            amRepo.deleteByVersion(w.id);
+            cbRepo.deleteByVersion(w.id);
+            versions.delete(w.id);
+          }
+        }
+      }
+      songs.moveToProject(songId, targetProjectId);
+    })();
+  });
+
+  ipcMain.handle('songs:createVariant', (_event, originalSongId: string, newTitle: string, targetProjectId: string) => {
+    const db = getDb();
+    const songs = new SongRepository(db);
+    const versions = new SongVersionRepository(db);
+    const cbRepo = new ContentBlockRepository(db);
+    const amRepo = new ArrangementMarkerRepository(db);
+    db.transaction(() => {
+      const working = versions.getByType(originalSongId, 'working');
+      let savedId: string;
+      if (working) {
+        const saved = versions.getByType(originalSongId, 'saved');
+        if (saved) {
+          amRepo.deleteByVersion(saved.id);
+          cbRepo.deleteByVersion(saved.id);
+          copyVersionContent(db, working.id, saved.id);
+          savedId = saved.id;
+        } else {
+          db.prepare("UPDATE song_versions SET type = 'saved' WHERE id = ?").run(working.id);
+          savedId = working.id;
+        }
+        const w2 = versions.getByType(originalSongId, 'working');
+        if (w2) {
+          amRepo.deleteByVersion(w2.id);
+          cbRepo.deleteByVersion(w2.id);
+          versions.delete(w2.id);
+        }
+      } else {
+        const saved = versions.getByType(originalSongId, 'saved');
+        savedId = saved?.id ?? '';
+      }
+      const newSong = songs.create(newTitle, targetProjectId);
+      const newVersion = versions.create(newSong.id, 'saved');
+      if (savedId) copyVersionContent(db, savedId, newVersion.id);
+    })();
+  });
+
+  ipcMain.handle('songs:saveAsVariant', (_event, originalSongId: string, newTitle: string, targetProjectId: string) => {
+    const db = getDb();
+    const songs = new SongRepository(db);
+    const versions = new SongVersionRepository(db);
+    const cbRepo = new ContentBlockRepository(db);
+    const amRepo = new ArrangementMarkerRepository(db);
+    db.transaction(() => {
+      const working = versions.getByType(originalSongId, 'working');
+      if (!working) return;
+      const newSong = songs.create(newTitle, targetProjectId);
+      const newVersion = versions.create(newSong.id, 'saved', working.capo, working.concertKey);
+      copyVersionContent(db, working.id, newVersion.id);
+      amRepo.deleteByVersion(working.id);
+      cbRepo.deleteByVersion(working.id);
+      versions.delete(working.id);
+    })();
+    return (new SongRepository(getDb()).getById(originalSongId));
   });
 }

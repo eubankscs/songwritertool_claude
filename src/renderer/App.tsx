@@ -3,12 +3,14 @@ import { HomeScreen } from './screens/HomeScreen';
 import { ProjectScreen } from './screens/ProjectScreen';
 import { ViewAllProjectsScreen } from './screens/ViewAllProjectsScreen';
 import { EditorScreen } from './screens/EditorScreen';
+import { OpenSongScreen } from './screens/OpenSongScreen';
 
 type Route =
   | { screen: 'home' }
   | { screen: 'project'; projectId: string }
   | { screen: 'allProjects' }
-  | { screen: 'editor'; songId: string };
+  | { screen: 'editor'; songId: string }
+  | { screen: 'openSong' };
 
 export default function App(): React.ReactElement {
   const [route, setRoute] = useState<Route>({ screen: 'home' });
@@ -22,6 +24,7 @@ export default function App(): React.ReactElement {
         onOpenProject={projectId => setRoute({ screen: 'project', projectId })}
         onViewAllProjects={() => setRoute({ screen: 'allProjects' })}
         onNewSong={songId => setRoute({ screen: 'editor', songId })}
+        onOpenSongView={() => setRoute({ screen: 'openSong' })}
       />
     );
   }
@@ -42,6 +45,15 @@ export default function App(): React.ReactElement {
       <ViewAllProjectsScreen
         onBack={goHome}
         onOpenProject={projectId => setRoute({ screen: 'project', projectId })}
+      />
+    );
+  }
+
+  if (route.screen === 'openSong') {
+    return (
+      <OpenSongScreen
+        onBack={goHome}
+        onOpenSong={songId => setRoute({ screen: 'editor', songId })}
       />
     );
   }
