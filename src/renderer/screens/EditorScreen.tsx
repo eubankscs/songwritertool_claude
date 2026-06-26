@@ -6,8 +6,11 @@ import { NotesSidePanel } from '../components/NotesSidePanel';
 import { ReviewQueuePanel } from '../components/ReviewQueuePanel';
 import { ManageTagsModal } from '../components/ManageTagsModal';
 import { SettingsModal } from '../components/SettingsModal';
+import { MoveToProjectModal } from '../components/MoveToProjectModal';
+import { PrintDialog, type PrintMode } from '../components/PrintDialog';
+import { InputDialog } from '../components/Dialog';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────────────
 
 interface ChordEntry {
   chord: string;
@@ -57,7 +60,7 @@ interface AnnotationModalState {
   tagId: string | null;
 }
 
-// ── Pure helpers ───────────────────────────────────────────────────────────────
+// ── Pure helpers ───────────────────────────────────────────────────────────────────────────────
 
 function isSectionContent(content: string): boolean {
   return /^\[.+\]$/.test(content.trim());
@@ -223,7 +226,7 @@ function buildFinalMarkers(
   return result;
 }
 
-// ── Component ───────────────────────────────────────────────────────────────────
+// ── Component ───────────────────────────────────────────────────────────────────────────────
 
 interface Props {
   songId: string;
@@ -240,7 +243,7 @@ const FLAT_KEYS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Cb', 'Dm', 'Gm', 
 const SHARP_KEYS = new Set(['G', 'D', 'A', 'E', 'B', 'F#', 'C#', 'Em', 'Bm', 'F#m', 'C#m', 'G#m', 'D#m', 'A#m']);
 
 export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
-  // ── Core editor state ───────────────────────────────────────────────────────
+  // ── Core editor state ───────────────────────────────────────────────────────────────────
   const [song, setSong] = useState<Song | null>(null);
   const [workingVersionId, setWorkingVersionId] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
@@ -253,7 +256,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
   const [concertKey, setConcertKey] = useState<string | null>(null);
   const [focusedLineIndex, setFocusedLineIndex] = useState(0);
 
-  // ── Phase 4 state ──────────────────────────────────────────────────────────
+  // ── Phase 4 state ────────────────────────────────────────────────────────────────────
   const [notes, setNotes] = useState<Note[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -266,7 +269,13 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
   const [showManageTags, setShowManageTags] = useState(false);
   const [annTooltip, setAnnTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
 
-  // ── Refs ───────────────────────────────────────────────────────────────────
+  // ── Phase 5 state ────────────────────────────────────────────────────────────────────
+  const [showMoveToProject, setShowMoveToProject] = useState(false);
+  const [printMode, setPrintMode] = useState<PrintMode | null>(null);
+  const [variantDialog, setVariantDialog] = useState<'create' | 'saveAs' | null>(null);
+  const [variantError, setVariantError] = useState('');
+
+  // ── Refs ─────────────────────────────────────────────────────────────────────────────
   const measureSpanRef = useRef<HTMLSpanElement>(null);
   const lineRefs = useRef<(HTMLInputElement | null)[]>([]);
   const pendingRef = useRef(false);
@@ -285,18 +294,18 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
   useEffect(() => { tagsRef.current = tags; }, [tags]);
   useEffect(() => { concertKeyRef.current = concertKey; }, [concertKey]);
 
-  // ── Measure character width ────────────────────────────────────────────────
+  // ── Measure character width ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (measureSpanRef.current) setCharWidth(measureSpanRef.current.getBoundingClientRect().width);
   }, []);
 
-  // ── Focus first line after load ──────────────────────────────────────────────
+  // ── Focus first line after load ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const t = setTimeout(() => lineRefs.current[0]?.focus(), 80);
     return () => clearTimeout(t);
   }, [song]);
 
-  // ── Load all song data ──────────────────────────────────────────────────────────
+  // ── Load all song data ──────────────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -359,7 +368,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     return () => { cancelled = true; };
   }, [songId]);
 
-  // ── Review queue helpers ───────────────────────────────────────────────────────
+  // ── Review queue helpers ────────────────────────────────────────────────────────────────────────
   const refreshReviewQueue = useCallback(async () => {
     const items = await window.songwriterAPI.reviewQueue.getBySong(songId);
     setReviewItems(items);
@@ -382,7 +391,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     tagsRef.current = t;
   }, []);
 
-  // ── Review Queue trigger checks ────────────────────────────────────────────────
+  // ── Review Queue trigger checks ───────────────────────────────────────────────────────────────────
   function hasActiveItem(type: string, message: string): boolean {
     return reviewItemsRef.current.some(i => i.type === type && i.message === message);
   }
@@ -482,7 +491,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     checkAmbiguousTranspose(concertKeyRef.current, currentLines);
   }
 
-  // ── Persistence ──────────────────────────────────────────────────────────────────
+  // ── Persistence ──────────────────────────────────────────────────────────────────────────────────
   const persistWorking = useCallback(async (): Promise<void> => {
     const currentLines = linesRef.current;
     const currentStandalones = standalonesRef.current;
@@ -574,7 +583,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     onBack();
   }
 
-  // ── Edit helpers ───────────────────────────────────────────────────────────────
+  // ── Edit helpers ─────────────────────────────────────────────────────────────────────────────
   function markDirty(currentLines?: EditorLine[]) {
     setIsDirty(true);
     scheduleAutoSave();
@@ -618,7 +627,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     }
   }
 
-  // ── Chord input ────────────────────────────────────────────────────────────────
+  // ── Chord input ─────────────────────────────────────────────────────────────────────────────
   function handleChordRowClick(lineIndex: number, e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -676,7 +685,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     }
   }
 
-  // ── Arrangement marker input ───────────────────────────────────────────────────
+  // ── Arrangement marker input ───────────────────────────────────────────────────────────────────
   function commitMarkerInput() {
     if (!markerInput) return;
     const trimmed = markerInput.value.trim();
@@ -723,7 +732,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     markDirty();
   }
 
-  // ── Annotation helpers ───────────────────────────────────────────────────────────
+  // ── Annotation helpers ───────────────────────────────────────────────────────────────────────────
   function getAnnotationsForLine(lineIndex: number): Array<{ ann: Annotation; startChar: number; endChar: number; color: string | null }> {
     const prefix = `${lineIndex}:`;
     return annotations
@@ -798,7 +807,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     });
   }
 
-  // ── Manual flag ────────────────────────────────────────────────────────────────
+  // ── Manual flag ──────────────────────────────────────────────────────────────────────────
   async function flagLineForReview(lineIndex: number) {
     const line = linesRef.current[lineIndex];
     const preview = line.content.substring(0, 40);
@@ -807,7 +816,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     refreshReviewQueue();
   }
 
-  // ── Capo / key ─────────────────────────────────────────────────────────────────
+  // ── Capo / key ──────────────────────────────────────────────────────────────────────────
   function handleKeyChange(value: string) {
     const newKey = value.trim() || null;
     setConcertKey(newKey);
@@ -825,7 +834,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     scheduleAutoSave();
   }
 
-  // ── Jump to review item ───────────────────────────────────────────────────────────
+  // ── Jump to review item ──────────────────────────────────────────────────────────────────────
   function jumpToReviewTarget(targetId: string | null) {
     if (!targetId) return;
     const lineIndex = parseInt(targetId, 10);
@@ -835,7 +844,33 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     }
   }
 
-  // ── Derived values ───────────────────────────────────────────────────────────────
+  // ── Phase 5: Variant / Move handlers ─────────────────────────────────────────────────────
+  async function handleCreateVariant(title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) { setVariantError('Title is required.'); return; }
+    if (!song) return;
+    const collides = await window.songwriterAPI.songs.checkTitleInProject(trimmed, song.projectId);
+    if (collides) { setVariantError(`"${trimmed}" already exists in this project.`); return; }
+    await window.songwriterAPI.songs.createVariant(songId, trimmed, song.projectId);
+    setVariantDialog(null);
+    setVariantError('');
+    setIsDirty(false);
+  }
+
+  async function handleSaveAsVariant(title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) { setVariantError('Title is required.'); return; }
+    if (!song) return;
+    const collides = await window.songwriterAPI.songs.checkTitleInProject(trimmed, song.projectId);
+    if (collides) { setVariantError(`"${trimmed}" already exists in this project.`); return; }
+    await window.songwriterAPI.songs.saveAsVariant(songId, trimmed, song.projectId);
+    setVariantDialog(null);
+    setVariantError('');
+    setWorkingVersionId(null);
+    setIsDirty(false);
+  }
+
+  // ── Derived values ─────────────────────────────────────────────────────────────────────────────
   const firstSectionIndex = lines.findIndex(l => isSectionContent(l.content));
   const noteCount = notes.length;
   const queueCount = reviewItems.length;
@@ -846,7 +881,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     isSection: isSectionContent(l.content),
   }));
 
-  // ── Render ───────────────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────────────────────
   return (
     <div style={{ ...s.screen, display: 'flex', flexDirection: 'column' }}>
       {/* Hidden char-width measurement span */}
@@ -856,7 +891,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
         style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', fontFamily: LYRIC_FONT, fontSize: LYRIC_SIZE, letterSpacing: 0, whiteSpace: 'pre' }}
       >m</span>
 
-      {/* ── Header ──────────────────────────────────────────────────────────────── */}
+      {/* ── Header ──────────────────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', borderBottom: `1px solid ${colors.border}`, background: colors.surface, flexShrink: 0, position: 'relative' }}>
         {/* Hamburger */}
         <span
@@ -868,19 +903,29 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
         {showHamburger && (
           <>
             <div style={{ position: 'fixed', inset: 0, zIndex: 50 }} onClick={() => setShowHamburger(false)} />
-            <div style={{ position: 'absolute', top: '40px', left: '12px', zIndex: 51, background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '6px', minWidth: '160px', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
-              <div
-                onClick={() => { setShowHamburger(false); handleBack(); }}
-                style={{ padding: '9px 14px', color: colors.text, fontSize: '13px', cursor: 'pointer' }}
-                onMouseEnter={e => (e.currentTarget.style.background = colors.surfaceHover)}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >Home</div>
-              <div
-                onClick={() => { setShowHamburger(false); setShowSettings(true); }}
-                style={{ padding: '9px 14px', color: colors.text, fontSize: '13px', cursor: 'pointer' }}
-                onMouseEnter={e => (e.currentTarget.style.background = colors.surfaceHover)}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >Settings</div>
+            <div style={{ position: 'absolute', top: '40px', left: '12px', zIndex: 51, background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '6px', minWidth: '200px', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+              {([
+                { label: 'Home', action: () => handleBack() },
+                { label: 'Settings', action: () => setShowSettings(true) },
+                null,
+                { label: 'Move To Project…', action: () => setShowMoveToProject(true) },
+                { label: 'Create Variant…', action: () => { setVariantError(''); setVariantDialog('create'); } },
+                ...(isDirty ? [{ label: 'Save Working Copy As Variant…', action: () => { setVariantError(''); setVariantDialog('saveAs'); } }] : []),
+                null,
+                { label: 'Print Chart…', action: () => setPrintMode('chart') },
+                { label: 'Print With Comments…', action: () => setPrintMode('withComments') },
+              ] as Array<{ label: string; action: () => void } | null>).map((item, i) => {
+                if (!item) return <div key={`sep-${i}`} style={{ borderTop: `1px solid ${colors.border}`, margin: '4px 0' }} />;
+                return (
+                  <div
+                    key={item.label}
+                    onClick={() => { setShowHamburger(false); item.action(); }}
+                    style={{ padding: '9px 14px', color: colors.text, fontSize: '13px', cursor: 'pointer' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = colors.surfaceHover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >{item.label}</div>
+                );
+              })}
             </div>
           </>
         )}
@@ -920,7 +965,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
         </label>
       </div>
 
-      {/* ── Arrangement marker dialog ─────────────────────────────────────────────────── */}
+      {/* ── Arrangement marker dialog ──────────────────────────────────────────────────────────────────────── */}
       {markerInput && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)' }} onClick={() => setMarkerInput(null)}>
           <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '16px 20px', minWidth: '300px' }} onClick={e => e.stopPropagation()}>
@@ -946,7 +991,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
         </div>
       )}
 
-      {/* ── Annotation modal ─────────────────────────────────────────────────────────── */}
+      {/* ── Annotation modal ───────────────────────────────────────────────────────────────────────────────── */}
       {annotationModal && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)' }} onClick={() => setAnnotationModal(null)}>
           <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '16px 20px', minWidth: '320px', maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
@@ -987,7 +1032,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
         </div>
       )}
 
-      {/* ── Settings / ManageTags modals ─────────────────────────────────────────────────── */}
+      {/* ── Settings / ManageTags modals ───────────────────────────────────────────────────────────────────── */}
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}
@@ -1002,14 +1047,57 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
         />
       )}
 
-      {/* ── Annotation tooltip ─────────────────────────────────────────────────────────────── */}
+      {/* ── Phase 5 modals ──────────────────────────────────────────────────────────────────────────────── */}
+      {showMoveToProject && song && (
+        <MoveToProjectModal
+          songId={songId}
+          songTitle={song.title}
+          currentProjectId={song.projectId}
+          onClose={() => setShowMoveToProject(false)}
+          onMoved={() => { setShowMoveToProject(false); setIsDirty(false); onBack(); }}
+        />
+      )}
+      {printMode && song && (
+        <PrintDialog
+          mode={printMode}
+          songTitle={song.title}
+          lines={lines}
+          standalones={standalones}
+          annotations={annotations}
+          capo={capo}
+          concertKey={concertKey}
+          onClose={() => setPrintMode(null)}
+        />
+      )}
+      {variantDialog === 'create' && (
+        <InputDialog
+          title="Create Variant"
+          placeholder="Variant title"
+          confirmLabel="Create"
+          onConfirm={handleCreateVariant}
+          onCancel={() => { setVariantDialog(null); setVariantError(''); }}
+          error={variantError}
+        />
+      )}
+      {variantDialog === 'saveAs' && (
+        <InputDialog
+          title="Save Working Copy As Variant"
+          placeholder="Variant title"
+          confirmLabel="Save As Variant"
+          onConfirm={handleSaveAsVariant}
+          onCancel={() => { setVariantDialog(null); setVariantError(''); }}
+          error={variantError}
+        />
+      )}
+
+      {/* ── Annotation tooltip ─────────────────────────────────────────────────────────────────────────────────────── */}
       {annTooltip && (
         <div style={{ position: 'fixed', left: annTooltip.x + 12, top: annTooltip.y - 4, zIndex: 200, background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '4px 8px', maxWidth: '240px', fontSize: '12px', color: colors.text, pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
           {annTooltip.text}
         </div>
       )}
 
-      {/* ── Body: canvas + optional side panel ───────────────────────────────────────── */}
+      {/* ── Body: canvas + optional side panel ────────────────────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
         {/* Canvas */}
@@ -1046,7 +1134,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
                 {needsBlankAbove && <div style={{ height: '1em' }} />}
 
                 {isSecLine ? (
-                  // ── Section tag ────────────────────────────────────────────────────────
+                  // ── Section tag ──────────────────────────────────────────────────────────────────────────
                   <div style={{ display: 'flex', alignItems: 'center' }}>
                     <input
                       ref={el => { lineRefs.current[index] = el; }}
@@ -1068,7 +1156,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
                     >⚑</span>
                   </div>
                 ) : (
-                  // ── Lyric line with chord row ───────────────────────────────────────────────
+                  // ── Lyric line with chord row ───────────────────────────────────────────────────────────────────────────
                   <div>
                     {/* Chord row */}
                     <div
@@ -1186,7 +1274,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
           />
         </div>
 
-        {/* ── Side panel ──────────────────────────────────────────────────────────────────── */}
+        {/* ── Side panel ────────────────────────────────────────────────────────────────────────────────────── */}
         {activePanel === 'notes' && (
           <NotesSidePanel
             songId={songId}
@@ -1207,7 +1295,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
         )}
       </div>
 
-      {/* ── Bottom-right utility icons ───────────────────────────────────────────────────────── */}
+      {/* ── Bottom-right utility icons ─────────────────────────────────────────────────────────────────────────────────── */}
       <div style={{ position: 'fixed', bottom: '20px', right: '20px', display: 'flex', flexDirection: 'column', gap: '8px', zIndex: 40 }}>
         {noteCount > 0 && (
           <button
