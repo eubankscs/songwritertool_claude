@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
 import { getDb, closeDb } from './database/db';
+import { registerIpcHandlers } from './ipc/handlers';
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -22,6 +23,7 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   getDb();
+  registerIpcHandlers();
   createWindow();
 
   app.on('activate', () => {
