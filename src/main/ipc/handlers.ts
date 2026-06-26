@@ -2,6 +2,9 @@ import { ipcMain } from 'electron';
 import { getDb } from '../database/db';
 import { ProjectRepository } from '../repositories/projectRepository';
 import { SongRepository } from '../repositories/songRepository';
+import { SongVersionRepository } from '../repositories/songVersionRepository';
+import { ContentBlockRepository } from '../repositories/contentBlockRepository';
+import type { ContentBlockType } from '../../shared/schema';
 
 function getRepos() {
   const db = getDb();
@@ -145,5 +148,38 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('songs:touchLastOpened', (_event, id: string) => {
     const { songs } = getRepos();
     songs.touchLastOpened(id);
+  });
+
+  ipcMain.handle('songs:getById', (_event, id: string) => {
+    const { songs } = getRepos();
+    return songs.getById(id);
+  });
+
+  // ── Song Versions ────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('songVersions:getBySong', (_event, songId: string) => {
+    const versions = new SongVersionRepository(getDb());
+    return versions.getBySongId(songId);
+  });
+
+  ipcMain.handle('songVersions:upsertWorking', (_event, songId: string) => {
+    const versions = new SongVersionRepository(getDb());
+    return versions.upsert(songId, 'working');
+  });
+
+  // ── Content Blocks ───────────────────────────────────────────────────────────────
+
+  ipcMain.handle('contentBlocks:getByVersion', (_event, versionId: string) => {
+    const blocks = new ContentBlockRepository(getDb());
+    return blocks.getByVersion(versionId);
+  });
+
+  ipcMain.handle('contentBlocks:replaceAll', (
+    _event,
+    versionId: string,
+    newBlocks: Array<{ type: ContentBlockType; content: string | null; position: number }>
+  ) => {
+    const blocks = new ContentBlockRepository(getDb());
+    blocks.replaceAll(versionId, newBlocks);
   });
 }

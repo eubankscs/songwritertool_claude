@@ -1,4 +1,4 @@
-import type { Project, Song } from './schema';
+import type { Project, Song, SongVersion, ContentBlock, ContentBlockType } from './schema';
 
 export interface RecentSong extends Song {
   containerName: string;
@@ -24,6 +24,18 @@ export interface SongwriterAPI {
     getNextUntitledName(): Promise<string>;
     softDelete(id: string): Promise<void>;
     touchLastOpened(id: string): Promise<void>;
+    getById(id: string): Promise<Song | undefined>;
+  };
+  songVersions: {
+    getBySong(songId: string): Promise<SongVersion[]>;
+    upsertWorking(songId: string): Promise<SongVersion>;
+  };
+  contentBlocks: {
+    getByVersion(versionId: string): Promise<ContentBlock[]>;
+    replaceAll(
+      versionId: string,
+      blocks: Array<{ type: ContentBlockType; content: string | null; position: number }>
+    ): Promise<void>;
   };
 }
 

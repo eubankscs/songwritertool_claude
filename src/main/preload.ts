@@ -21,5 +21,17 @@ contextBridge.exposeInMainWorld('songwriterAPI', {
     getNextUntitledName: () => ipcRenderer.invoke('songs:getNextUntitledName'),
     softDelete: (id: string) => ipcRenderer.invoke('songs:softDelete', id),
     touchLastOpened: (id: string) => ipcRenderer.invoke('songs:touchLastOpened', id),
+    getById: (id: string) => ipcRenderer.invoke('songs:getById', id),
+  },
+  songVersions: {
+    getBySong: (songId: string) => ipcRenderer.invoke('songVersions:getBySong', songId),
+    upsertWorking: (songId: string) => ipcRenderer.invoke('songVersions:upsertWorking', songId),
+  },
+  contentBlocks: {
+    getByVersion: (versionId: string) => ipcRenderer.invoke('contentBlocks:getByVersion', versionId),
+    replaceAll: (
+      versionId: string,
+      blocks: Array<{ type: string; content: string | null; position: number }>
+    ) => ipcRenderer.invoke('contentBlocks:replaceAll', versionId, blocks),
   },
 });
