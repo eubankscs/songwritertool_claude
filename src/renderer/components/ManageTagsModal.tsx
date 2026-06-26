@@ -77,11 +77,13 @@ export function ManageTagsModal({ tags, onClose, onTagsChanged }: Props): React.
         style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '8px', padding: '20px 24px', width: '380px', maxWidth: '92vw', maxHeight: '80vh', overflowY: 'auto' }}
         onClick={e => e.stopPropagation()}
       >
+        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <span style={{ fontWeight: 600, color: colors.text, fontSize: '14px' }}>Manage Tags</span>
           <span onClick={onClose} style={{ color: colors.textSecondary, cursor: 'pointer', fontSize: '18px', lineHeight: 1 }}>✕</span>
         </div>
 
+        {/* Tag list */}
         {tags.length === 0 && (
           <div style={{ color: colors.textSecondary, fontSize: '13px', marginBottom: '12px' }}>No tags yet.</div>
         )}
@@ -96,6 +98,7 @@ export function ManageTagsModal({ tags, onClose, onTagsChanged }: Props): React.
                   style={inputStyle}
                 />
                 {error && <div style={{ color: colors.danger, fontSize: '11px' }}>{error}</div>}
+                {/* Color swatches */}
                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                   <span
                     onClick={() => setEditColor(null)}
@@ -141,6 +144,7 @@ export function ManageTagsModal({ tags, onClose, onTagsChanged }: Props): React.
           </div>
         ))}
 
+        {/* Add new tag */}
         <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
           <input
             value={newName}

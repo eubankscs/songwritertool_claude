@@ -96,18 +96,25 @@ export function NotesSidePanel({ songId, notes, lines, focusedLineIndex, onClose
       background: colors.surface, display: 'flex', flexDirection: 'column',
       overflowY: 'auto',
     }}>
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
         <span style={{ fontWeight: 600, fontSize: '12px', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Song Notes</span>
         <span onClick={onClose} style={{ color: colors.textSecondary, cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>✕</span>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px' }}>
+        {/* Song-level notes */}
         <div style={{ color: colors.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Song Note</div>
         {songNotes.map(note => (
           <div key={note.id} style={{ marginBottom: '8px' }}>
             {editingId === note.id ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <textarea autoFocus value={editBody} onChange={e => setEditBody(e.target.value)} style={textareaStyle} />
+                <textarea
+                  autoFocus
+                  value={editBody}
+                  onChange={e => setEditBody(e.target.value)}
+                  style={textareaStyle}
+                />
                 <div style={{ display: 'flex', gap: '4px' }}>
                   <button onClick={saveEdit} style={btnSmall}>Save</button>
                   <button onClick={() => setEditingId(null)} style={btnGhost}>Cancel</button>
@@ -115,14 +122,23 @@ export function NotesSidePanel({ songId, notes, lines, focusedLineIndex, onClose
                 </div>
               </div>
             ) : (
-              <div onClick={() => startEdit(note)} style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '6px 8px', cursor: 'pointer' }}>
+              <div
+                onClick={() => startEdit(note)}
+                style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '6px 8px', cursor: 'pointer' }}
+              >
                 <div style={{ color: colors.text, fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note.body}</div>
               </div>
             )}
           </div>
         ))}
+        {/* Add song note */}
         <div style={{ marginBottom: '16px' }}>
-          <textarea value={newSongBody} onChange={e => setNewSongBody(e.target.value)} placeholder="Add song note…" style={{ ...textareaStyle, minHeight: '40px' }} />
+          <textarea
+            value={newSongBody}
+            onChange={e => setNewSongBody(e.target.value)}
+            placeholder="Add song note…"
+            style={{ ...textareaStyle, minHeight: '40px' }}
+          />
           {newSongBody.trim() && (
             <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
               <button onClick={addSongNote} style={btnSmall}>Add</button>
@@ -131,6 +147,7 @@ export function NotesSidePanel({ songId, notes, lines, focusedLineIndex, onClose
           )}
         </div>
 
+        {/* Line / section notes */}
         <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: '12px' }}>
           <div style={{ color: colors.textSecondary, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '8px' }}>Line & Section Notes</div>
           {lineNotes.length === 0 && (
@@ -147,7 +164,12 @@ export function NotesSidePanel({ songId, notes, lines, focusedLineIndex, onClose
                 )}
                 {editingId === note.id ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <textarea autoFocus value={editBody} onChange={e => setEditBody(e.target.value)} style={textareaStyle} />
+                    <textarea
+                      autoFocus
+                      value={editBody}
+                      onChange={e => setEditBody(e.target.value)}
+                      style={textareaStyle}
+                    />
                     <div style={{ display: 'flex', gap: '4px' }}>
                       <button onClick={saveEdit} style={btnSmall}>Save</button>
                       <button onClick={() => setEditingId(null)} style={btnGhost}>Cancel</button>
@@ -155,7 +177,10 @@ export function NotesSidePanel({ songId, notes, lines, focusedLineIndex, onClose
                     </div>
                   </div>
                 ) : (
-                  <div onClick={() => startEdit(note)} style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '6px 8px', cursor: 'pointer' }}>
+                  <div
+                    onClick={() => startEdit(note)}
+                    style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '6px 8px', cursor: 'pointer' }}
+                  >
                     <div style={{ color: colors.text, fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note.body}</div>
                   </div>
                 )}
@@ -163,8 +188,12 @@ export function NotesSidePanel({ songId, notes, lines, focusedLineIndex, onClose
             );
           })}
 
+          {/* Add note for focused line */}
           {focusedLine && !addingLineNote && (
-            <button onClick={() => setAddingLineNote(true)} style={{ ...btnGhost, fontSize: '11px', width: '100%', textAlign: 'left', padding: '5px 8px' }}>
+            <button
+              onClick={() => setAddingLineNote(true)}
+              style={{ ...btnGhost, fontSize: '11px', width: '100%', textAlign: 'left', padding: '5px 8px' }}
+            >
               + Add note for "{focusedLine.content.substring(0, 20) || '(empty line)'}"
             </button>
           )}
@@ -173,7 +202,13 @@ export function NotesSidePanel({ songId, notes, lines, focusedLineIndex, onClose
               <div style={{ color: colors.textSecondary, fontSize: '10px', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {focusedLine.isSection ? '§' : '↳'} {focusedLine.content.substring(0, 35) || '(empty line)'}
               </div>
-              <textarea autoFocus value={newLineBody} onChange={e => setNewLineBody(e.target.value)} placeholder="Add note…" style={textareaStyle} />
+              <textarea
+                autoFocus
+                value={newLineBody}
+                onChange={e => setNewLineBody(e.target.value)}
+                placeholder="Add note…"
+                style={textareaStyle}
+              />
               <div style={{ display: 'flex', gap: '4px' }}>
                 <button onClick={addLineNote} style={btnSmall}>Add</button>
                 <button onClick={() => { setAddingLineNote(false); setNewLineBody(''); }} style={btnGhost}>Cancel</button>

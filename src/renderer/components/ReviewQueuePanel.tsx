@@ -35,6 +35,7 @@ export function ReviewQueuePanel({ items, onClose, onItemsChanged, onJumpTo }: P
       background: colors.surface, display: 'flex', flexDirection: 'column',
       overflowY: 'auto',
     }}>
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
         <span style={{ fontWeight: 600, fontSize: '12px', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
           Review Queue {items.length > 0 && <span style={{ color: colors.accent }}>({items.length})</span>}
@@ -44,7 +45,9 @@ export function ReviewQueuePanel({ items, onClose, onItemsChanged, onJumpTo }: P
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
         {items.length === 0 ? (
-          <div style={{ color: colors.textSecondary, fontSize: '13px', textAlign: 'center', marginTop: '24px' }}>No items to review.</div>
+          <div style={{ color: colors.textSecondary, fontSize: '13px', textAlign: 'center', marginTop: '24px' }}>
+            No items to review.
+          </div>
         ) : (
           items.map(item => {
             const meta = TYPE_LABELS[item.type] ?? { label: item.type, color: colors.textSecondary };
