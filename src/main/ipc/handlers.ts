@@ -5,7 +5,11 @@ import { SongRepository } from '../repositories/songRepository';
 import { SongVersionRepository } from '../repositories/songVersionRepository';
 import { ContentBlockRepository } from '../repositories/contentBlockRepository';
 import { ArrangementMarkerRepository } from '../repositories/arrangementMarkerRepository';
-import type { ContentBlock, ContentBlockType, ArrangementMarkerDisplayMode } from '../../shared/schema';
+import { NoteRepository } from '../repositories/noteRepository';
+import { AnnotationRepository } from '../repositories/annotationRepository';
+import { TagRepository } from '../repositories/tagRepository';
+import { ReviewQueueRepository } from '../repositories/reviewQueueRepository';
+import type { ContentBlock, ContentBlockType, ArrangementMarkerDisplayMode, NoteType } from '../../shared/schema';
 
 function getRepos() {
   const db = getDb();
@@ -266,5 +270,69 @@ export function registerIpcHandlers(): void {
     } catch {
       event.returnValue = { success: false };
     }
+  });
+
+  // ── Song Version Meta ─────────────────────────────────────────────────────
+  ipcMain.handle('songVersions:updateMeta', (_event, versionId: string, capo: number | null, concertKey: string | null) => {
+    getDb().prepare('UPDATE song_versions SET capo = ?, concertKey = ? WHERE id = ?').run(capo, concertKey, versionId);
+  });
+
+  // ── Notes ──────────────────────────────────────────────────────────────────
+  ipcMain.handle('notes:getBySong', (_event, songId: string) => {
+    return new NoteRepository(getDb()).getBySong(songId);
+  });
+  ipcMain.handle('notes:create', (_event, songId: string, noteType: NoteType, body: string, targetId: string | null) => {
+    return new NoteRepository(getDb()).create(songId, noteType, body, targetId);
+  });
+  ipcMain.handle('notes:update', (_event, id: string, body: string) => {
+    new NoteRepository(getDb()).update(id, body);
+  });
+  ipcMain.handle('notes:delete', (_event, id: string) => {
+    new NoteRepository(getDb()).delete(id);
+  });
+
+  // ── Annotations ───────────────────────────────────────────────────────────
+  ipcMain.handle('annotations:getBySong', (_event, songId: string) => {
+    return new AnnotationRepository(getDb()).getBySong(songId);
+  });
+  ipcMain.handle('annotations:getByRange', (_event, songId: string, targetRange: string) => {
+    return new AnnotationRepository(getDb()).getByRange(songId, targetRange);
+  });
+  ipcMain.handle('annotations:create', (_event, songId: string, targetRange: string, body: string, tagId: string | null) => {
+    return new AnnotationRepository(getDb()).create(songId, targetRange, body, tagId);
+  });
+  ipcMain.handle('annotations:update', (_event, id: string, body: string, tagId: string | null) => {
+    new AnnotationRepository(getDb()).update(id, body, tagId);
+  });
+  ipcMain.handle('annotations:delete', (_event, id: string) => {
+    new AnnotationRepository(getDb()).delete(id);
+  });
+
+  // ── Tags ───────────────────────────────────────────────────────────────────
+  ipcMain.handle('tags:getAll', () => {
+    return new TagRepository(getDb()).getAll();
+  });
+  ipcMain.handle('tags:create', (_event, name: string, color: string | null, createsReviewItem: boolean) => {
+    return new TagRepository(getDb()).create(name, color, createsReviewItem);
+  });
+  ipcMain.handle('tags:update', (_event, id: string, name: string, color: string | null, createsReviewItem: boolean) => {
+    new TagRepository(getDb()).update(id, name, color, createsReviewItem);
+  });
+  ipcMain.handle('tags:delete', (_event, id: string) => {
+    new TagRepository(getDb()).delete(id);
+  });
+
+  // ── Review Queue ──────────────────────────────────────────────────────────
+  ipcMain.handle('reviewQueue:getBySong', (_event, songId: string) => {
+    return new ReviewQueueRepository(getDb()).getBySong(songId);
+  });
+  ipcMain.handle('reviewQueue:create', (_event, songId: string, type: string, message: string, targetId: string | null) => {
+    return new ReviewQueueRepository(getDb()).create(songId, type, message, targetId);
+  });
+  ipcMain.handle('reviewQueue:resolve', (_event, id: string) => {
+    new ReviewQueueRepository(getDb()).resolve(id);
+  });
+  ipcMain.handle('reviewQueue:ignore', (_event, id: string) => {
+    new ReviewQueueRepository(getDb()).ignore(id);
   });
 }

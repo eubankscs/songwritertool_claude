@@ -1,4 +1,4 @@
-import type { Project, Song, SongVersion, ContentBlock, ContentBlockType, ArrangementMarker } from './schema';
+import type { Project, Song, SongVersion, ContentBlock, ContentBlockType, ArrangementMarker, Note, NoteType, Annotation, Tag, ReviewQueueItem } from './schema';
 
 export interface RecentSong extends Song {
   containerName: string;
@@ -40,6 +40,7 @@ export interface SongwriterAPI {
     upsertWorking(songId: string): Promise<SongVersion>;
     upsertSaved(songId: string): Promise<SongVersion>;
     deleteWorking(songId: string): Promise<void>;
+    updateMeta(versionId: string, capo: number | null, concertKey: string | null): Promise<void>;
   };
   contentBlocks: {
     getByVersion(versionId: string): Promise<ContentBlock[]>;
@@ -54,6 +55,31 @@ export interface SongwriterAPI {
       versionId: string,
       markers: Array<{ targetPosition: string; displayMode: 'inline' | 'standalone'; text: string }>
     ): Promise<void>;
+  };
+  notes: {
+    getBySong(songId: string): Promise<Note[]>;
+    create(songId: string, noteType: NoteType, body: string, targetId: string | null): Promise<Note>;
+    update(id: string, body: string): Promise<void>;
+    delete(id: string): Promise<void>;
+  };
+  annotations: {
+    getBySong(songId: string): Promise<Annotation[]>;
+    getByRange(songId: string, targetRange: string): Promise<Annotation | undefined>;
+    create(songId: string, targetRange: string, body: string, tagId: string | null): Promise<Annotation>;
+    update(id: string, body: string, tagId: string | null): Promise<void>;
+    delete(id: string): Promise<void>;
+  };
+  tags: {
+    getAll(): Promise<Tag[]>;
+    create(name: string, color: string | null, createsReviewItem: boolean): Promise<Tag>;
+    update(id: string, name: string, color: string | null, createsReviewItem: boolean): Promise<void>;
+    delete(id: string): Promise<void>;
+  };
+  reviewQueue: {
+    getBySong(songId: string): Promise<ReviewQueueItem[]>;
+    create(songId: string, type: string, message: string, targetId: string | null): Promise<ReviewQueueItem>;
+    resolve(id: string): Promise<void>;
+    ignore(id: string): Promise<void>;
   };
 }
 

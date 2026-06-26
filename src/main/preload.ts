@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('songwriterAPI', {
     upsertWorking: (songId: string) => ipcRenderer.invoke('songVersions:upsertWorking', songId),
     upsertSaved: (songId: string) => ipcRenderer.invoke('songVersions:upsertSaved', songId),
     deleteWorking: (songId: string) => ipcRenderer.invoke('songVersions:deleteWorking', songId),
+    updateMeta: (versionId: string, capo: number | null, concertKey: string | null) =>
+      ipcRenderer.invoke('songVersions:updateMeta', versionId, capo, concertKey),
   },
   contentBlocks: {
     getByVersion: (versionId: string) => ipcRenderer.invoke('contentBlocks:getByVersion', versionId),
@@ -43,5 +45,37 @@ contextBridge.exposeInMainWorld('songwriterAPI', {
       versionId: string,
       markers: Array<{ targetPosition: string; displayMode: string; text: string }>
     ) => ipcRenderer.invoke('arrangementMarkers:replaceAll', versionId, markers),
+  },
+  notes: {
+    getBySong: (songId: string) => ipcRenderer.invoke('notes:getBySong', songId),
+    create: (songId: string, noteType: string, body: string, targetId: string | null) =>
+      ipcRenderer.invoke('notes:create', songId, noteType, body, targetId),
+    update: (id: string, body: string) => ipcRenderer.invoke('notes:update', id, body),
+    delete: (id: string) => ipcRenderer.invoke('notes:delete', id),
+  },
+  annotations: {
+    getBySong: (songId: string) => ipcRenderer.invoke('annotations:getBySong', songId),
+    getByRange: (songId: string, targetRange: string) =>
+      ipcRenderer.invoke('annotations:getByRange', songId, targetRange),
+    create: (songId: string, targetRange: string, body: string, tagId: string | null) =>
+      ipcRenderer.invoke('annotations:create', songId, targetRange, body, tagId),
+    update: (id: string, body: string, tagId: string | null) =>
+      ipcRenderer.invoke('annotations:update', id, body, tagId),
+    delete: (id: string) => ipcRenderer.invoke('annotations:delete', id),
+  },
+  tags: {
+    getAll: () => ipcRenderer.invoke('tags:getAll'),
+    create: (name: string, color: string | null, createsReviewItem: boolean) =>
+      ipcRenderer.invoke('tags:create', name, color, createsReviewItem),
+    update: (id: string, name: string, color: string | null, createsReviewItem: boolean) =>
+      ipcRenderer.invoke('tags:update', id, name, color, createsReviewItem),
+    delete: (id: string) => ipcRenderer.invoke('tags:delete', id),
+  },
+  reviewQueue: {
+    getBySong: (songId: string) => ipcRenderer.invoke('reviewQueue:getBySong', songId),
+    create: (songId: string, type: string, message: string, targetId: string | null) =>
+      ipcRenderer.invoke('reviewQueue:create', songId, type, message, targetId),
+    resolve: (id: string) => ipcRenderer.invoke('reviewQueue:resolve', id),
+    ignore: (id: string) => ipcRenderer.invoke('reviewQueue:ignore', id),
   },
 });
