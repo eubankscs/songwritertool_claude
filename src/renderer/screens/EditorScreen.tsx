@@ -1,19 +1,23 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { colors, s } from '../styles';
-import type { Song, ContentBlock, ContentBlockType, ArrangementMarker } from '../../shared/schema';
+import type { Song, ContentBlock, ContentBlockType, ArrangementMarker, Note, Annotation, Tag, ReviewQueueItem } from '../../shared/schema';
 import type { PersistWorkingSyncPayload } from '../../shared/api';
+import { NotesSidePanel } from '../components/NotesSidePanel';
+import { ReviewQueuePanel } from '../components/ReviewQueuePanel';
+import { ManageTagsModal } from '../components/ManageTagsModal';
+import { SettingsModal } from '../components/SettingsModal';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface ChordEntry {
   chord: string;
-  pos: number;  // character index within the lyric line
+  pos: number;
 }
 
 interface InlineMarker {
   id: string;
   text: string;
-  charOffset: number;  // character index — same system as ChordEntry.pos
+  charOffset: number;
 }
 
 interface StandaloneMarker {
@@ -23,7 +27,7 @@ interface StandaloneMarker {
 }
 
 interface EditorLine {
-  id: string;  // lyricLine or section block id from DB (or 'tmp-N' for new)
+  id: string;
   content: string;
   chords: ChordEntry[];
   inlineMarkers: InlineMarker[];
@@ -43,6 +47,16 @@ interface MarkerInputState {
   value: string;
 }
 
+interface AnnotationModalState {
+  mode: 'create' | 'edit';
+  lineIndex: number;
+  startChar: number;
+  endChar: number;
+  existing?: Annotation;
+  body: string;
+  tagId: string | null;
+}
+
 // ── Pure helpers ───────────────────────────────────────────────────────────────
 
 function isSectionContent(content: string): boolean {
@@ -52,6 +66,10 @@ function isSectionContent(content: string): boolean {
 let tmpCounter = 0;
 function newLine(content = ''): EditorLine {
   return { id: `tmp-${++tmpCounter}`, content, chords: [], inlineMarkers: [] };
+}
+
+function isValidChord(chord: string): boolean {
+  return /^[A-G][b#]?[a-z0-9#+()/ ]*$/i.test(chord.trim());
 }
 
 function blocksToLines(blocks: ContentBlock[]): EditorLine[] {
@@ -73,7 +91,7 @@ function blocksToLines(blocks: ContentBlock[]): EditorLine[] {
       result.push({ id: block.id, content: block.content ?? '', chords: [], inlineMarkers: [] });
       i++;
     } else {
-      i++; // arrangementMarker block type — not used
+      i++;
     }
   }
   return result.length > 0 ? result : [newLine()];
@@ -84,7 +102,6 @@ function attachMarkers(
   markers: ArrangementMarker[],
   blocks: ContentBlock[]
 ): { updatedLines: EditorLine[]; standalones: StandaloneMarker[] } {
-  // Build maps: blockId → lineIndex, blockPosition → lineIndex
   const idToLine = new Map<string, number>();
   const posToLine = new Map<number, number>();
   for (let i = 0; i < lines.length; i++) {
@@ -121,7 +138,6 @@ function attachMarkers(
   return { updatedLines, standalones };
 }
 
-// Returns: Map<lineIndex → position of the primary block for that line>
 function computeLinePositions(lines: EditorLine[]): Map<number, number> {
   const map = new Map<number, number>();
   let pos = 0;
@@ -129,8 +145,8 @@ function computeLinePositions(lines: EditorLine[]): Map<number, number> {
     if (isSectionContent(lines[i].content)) {
       map.set(i, pos++);
     } else {
-      if (lines[i].chords.length > 0) pos++; // chordLine block
-      map.set(i, pos++);                      // lyricLine block
+      if (lines[i].chords.length > 0) pos++;
+      map.set(i, pos++);
     }
   }
   return map;
@@ -154,7 +170,6 @@ function linesToBlocks(
   return out;
 }
 
-// Builds position-based marker payload for IPC (main process resolves positions → block IDs).
 function buildSyncPayload(
   lines: EditorLine[],
   standalones: StandaloneMarker[]
@@ -180,7 +195,6 @@ function buildSyncPayload(
   return { blocks, inlineMarkers, standaloneMarkers };
 }
 
-// Builds final arrangement marker records with real block IDs (for async saves).
 function buildFinalMarkers(
   lines: EditorLine[],
   standalones: StandaloneMarker[],
@@ -209,7 +223,7 @@ function buildFinalMarkers(
   return result;
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+// ── Component ───────────────────────────────────────────────────────────────────
 
 interface Props {
   songId: string;
@@ -222,7 +236,11 @@ const CHORD_SIZE = '12px';
 const CHORD_ROW_HEIGHT = 20;
 const DEBOUNCE_MS = 2000;
 
+const FLAT_KEYS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Cb', 'Dm', 'Gm', 'Cm', 'Fm', 'Bbm', 'Ebm', 'Abm']);
+const SHARP_KEYS = new Set(['G', 'D', 'A', 'E', 'B', 'F#', 'C#', 'Em', 'Bm', 'F#m', 'C#m', 'G#m', 'D#m', 'A#m']);
+
 export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
+  // ── Core editor state ───────────────────────────────────────────────────────
   const [song, setSong] = useState<Song | null>(null);
   const [workingVersionId, setWorkingVersionId] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
@@ -231,8 +249,24 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
   const [charWidth, setCharWidth] = useState(8.41);
   const [chordInput, setChordInput] = useState<ChordInputState | null>(null);
   const [markerInput, setMarkerInput] = useState<MarkerInputState | null>(null);
+  const [capo, setCapo] = useState<number | null>(null);
+  const [concertKey, setConcertKey] = useState<string | null>(null);
+  const [focusedLineIndex, setFocusedLineIndex] = useState(0);
 
-  // Stable refs — used in event handlers that must not capture stale closures
+  // ── Phase 4 state ──────────────────────────────────────────────────────────
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [reviewItems, setReviewItems] = useState<ReviewQueueItem[]>([]);
+  const [activePanel, setActivePanel] = useState<'notes' | 'reviewQueue' | null>(null);
+  const [annotationModal, setAnnotationModal] = useState<AnnotationModalState | null>(null);
+  const [selection, setSelection] = useState<{ lineIndex: number; startChar: number; endChar: number } | null>(null);
+  const [showHamburger, setShowHamburger] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showManageTags, setShowManageTags] = useState(false);
+  const [annTooltip, setAnnTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+
+  // ── Refs ───────────────────────────────────────────────────────────────────
   const measureSpanRef = useRef<HTMLSpanElement>(null);
   const lineRefs = useRef<(HTMLInputElement | null)[]>([]);
   const pendingRef = useRef(false);
@@ -240,33 +274,54 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
   const workingVersionIdRef = useRef<string | null>(null);
   const linesRef = useRef<EditorLine[]>(lines);
   const standalonesRef = useRef<StandaloneMarker[]>([]);
+  const reviewItemsRef = useRef<ReviewQueueItem[]>([]);
+  const tagsRef = useRef<Tag[]>([]);
+  const concertKeyRef = useRef<string | null>(null);
 
   useEffect(() => { workingVersionIdRef.current = workingVersionId; }, [workingVersionId]);
   useEffect(() => { linesRef.current = lines; }, [lines]);
   useEffect(() => { standalonesRef.current = standalones; }, [standalones]);
+  useEffect(() => { reviewItemsRef.current = reviewItems; }, [reviewItems]);
+  useEffect(() => { tagsRef.current = tags; }, [tags]);
+  useEffect(() => { concertKeyRef.current = concertKey; }, [concertKey]);
 
-  // Measure monospace character width once after first paint
+  // ── Measure character width ────────────────────────────────────────────────
   useEffect(() => {
     if (measureSpanRef.current) setCharWidth(measureSpanRef.current.getBoundingClientRect().width);
   }, []);
 
-  // Focus first line when song loads
+  // ── Focus first line after load ──────────────────────────────────────────────
   useEffect(() => {
     const t = setTimeout(() => lineRefs.current[0]?.focus(), 80);
     return () => clearTimeout(t);
   }, [song]);
 
-  // Load song + versions + content + markers
+  // ── Load all song data ──────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     async function load() {
       window.songwriterAPI.songs.touchLastOpened(songId);
-      const loadedSong = await window.songwriterAPI.songs.getById(songId);
+      const [loadedSong, allTags] = await Promise.all([
+        window.songwriterAPI.songs.getById(songId),
+        window.songwriterAPI.tags.getAll(),
+      ]);
       if (cancelled) return;
       setSong(loadedSong ?? null);
+      setTags(allTags);
+      tagsRef.current = allTags;
 
-      const versions = await window.songwriterAPI.songVersions.getBySong(songId);
+      const [versions, loadedNotes, loadedAnnotations, loadedReviewItems] = await Promise.all([
+        window.songwriterAPI.songVersions.getBySong(songId),
+        window.songwriterAPI.notes.getBySong(songId),
+        window.songwriterAPI.annotations.getBySong(songId),
+        window.songwriterAPI.reviewQueue.getBySong(songId),
+      ]);
       if (cancelled) return;
+
+      setNotes(loadedNotes);
+      setAnnotations(loadedAnnotations);
+      setReviewItems(loadedReviewItems);
+      reviewItemsRef.current = loadedReviewItems;
 
       const working = versions.find(v => v.type === 'working') ?? null;
       const saved = versions.find(v => v.type === 'saved') ?? null;
@@ -277,6 +332,10 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
       setIsDirty(!!working);
 
       if (loadFrom) {
+        setCapo(loadFrom.capo);
+        setConcertKey(loadFrom.concertKey);
+        concertKeyRef.current = loadFrom.concertKey;
+
         const [rawBlocks, rawMarkers] = await Promise.all([
           window.songwriterAPI.contentBlocks.getByVersion(loadFrom.id),
           window.songwriterAPI.arrangementMarkers.getByVersion(loadFrom.id),
@@ -300,8 +359,130 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     return () => { cancelled = true; };
   }, [songId]);
 
-  // ── Persistence ────────────────────────────────────────────────────────────────
+  // ── Review queue helpers ───────────────────────────────────────────────────────
+  const refreshReviewQueue = useCallback(async () => {
+    const items = await window.songwriterAPI.reviewQueue.getBySong(songId);
+    setReviewItems(items);
+    reviewItemsRef.current = items;
+  }, [songId]);
 
+  const refreshNotes = useCallback(async () => {
+    const n = await window.songwriterAPI.notes.getBySong(songId);
+    setNotes(n);
+  }, [songId]);
+
+  const refreshAnnotations = useCallback(async () => {
+    const a = await window.songwriterAPI.annotations.getBySong(songId);
+    setAnnotations(a);
+  }, [songId]);
+
+  const refreshTags = useCallback(async () => {
+    const t = await window.songwriterAPI.tags.getAll();
+    setTags(t);
+    tagsRef.current = t;
+  }, []);
+
+  // ── Review Queue trigger checks ────────────────────────────────────────────────
+  function hasActiveItem(type: string, message: string): boolean {
+    return reviewItemsRef.current.some(i => i.type === type && i.message === message);
+  }
+
+  const checkUnknownChord = useCallback(async (chord: string, lineIndex: number) => {
+    if (isValidChord(chord)) return;
+    const msg = `Unknown chord: "${chord}"`;
+    if (!hasActiveItem('unknown-chord', msg)) {
+      await window.songwriterAPI.reviewQueue.create(songId, 'unknown-chord', msg, String(lineIndex));
+      refreshReviewQueue();
+    }
+  }, [songId, refreshReviewQueue]);
+
+  const checkSectionTriggers = useCallback(async (currentLines: EditorLine[]) => {
+    const counts = new Map<string, number>();
+    for (const line of currentLines) {
+      if (isSectionContent(line.content)) {
+        const name = line.content.trim();
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+    }
+    for (const [name, count] of counts) {
+      if (count > 1) {
+        const msg = `Section ${name} appears ${count} times`;
+        if (!hasActiveItem('section-conflict', msg)) {
+          await window.songwriterAPI.reviewQueue.create(songId, 'section-conflict', msg, null);
+        }
+      }
+    }
+
+    const sectionContent = new Map<string, string[]>();
+    let curSection: string | null = null;
+    let curContent = '';
+    for (const line of currentLines) {
+      if (isSectionContent(line.content)) {
+        if (curSection !== null) {
+          if (!sectionContent.has(curSection)) sectionContent.set(curSection, []);
+          sectionContent.get(curSection)!.push(curContent);
+        }
+        curSection = line.content.trim();
+        curContent = '';
+      } else {
+        curContent += line.content + '|' + JSON.stringify(line.chords) + '\n';
+      }
+    }
+    if (curSection !== null) {
+      if (!sectionContent.has(curSection)) sectionContent.set(curSection, []);
+      sectionContent.get(curSection)!.push(curContent);
+    }
+    for (const [name, contents] of sectionContent) {
+      if (contents.length > 1 && !contents.every(c => c === contents[0])) {
+        const msg = `Section ${name} has diverging content`;
+        if (!hasActiveItem('broken-section-link', msg)) {
+          await window.songwriterAPI.reviewQueue.create(songId, 'broken-section-link', msg, null);
+        }
+      }
+    }
+    refreshReviewQueue();
+  }, [songId, refreshReviewQueue]);
+
+  const checkAmbiguousTranspose = useCallback(async (key: string | null, currentLines: EditorLine[]) => {
+    if (!key) return;
+    const isFlat = FLAT_KEYS.has(key);
+    const isSharp = SHARP_KEYS.has(key);
+    if (!isFlat && !isSharp) return;
+
+    for (const line of currentLines) {
+      for (const { chord } of line.chords) {
+        const acc = chord.match(/^[A-G]([b#]?)/)?.[1] ?? '';
+        let msg = '';
+        if (isFlat && acc === '#') {
+          msg = `Chord "${chord}" uses sharp notation in flat key (${key})`;
+        } else if (isSharp && acc === 'b') {
+          msg = `Chord "${chord}" uses flat notation in sharp key (${key})`;
+        }
+        if (msg && !hasActiveItem('ambiguous-transpose', msg)) {
+          await window.songwriterAPI.reviewQueue.create(songId, 'ambiguous-transpose', msg, null);
+        }
+      }
+    }
+    refreshReviewQueue();
+  }, [songId, refreshReviewQueue]);
+
+  const checkPlaceholderLyric = useCallback(async (tagId: string | null) => {
+    if (!tagId) return;
+    const tag = tagsRef.current.find(t => t.id === tagId);
+    if (!tag?.createsReviewItem) return;
+    const msg = `Placeholder lyric: tag "${tag.name}" applied`;
+    if (!hasActiveItem('placeholder-lyric', msg)) {
+      await window.songwriterAPI.reviewQueue.create(songId, 'placeholder-lyric', msg, null);
+      refreshReviewQueue();
+    }
+  }, [songId, refreshReviewQueue]);
+
+  function runTriggerChecks(currentLines: EditorLine[]) {
+    checkSectionTriggers(currentLines);
+    checkAmbiguousTranspose(concertKeyRef.current, currentLines);
+  }
+
+  // ── Persistence ──────────────────────────────────────────────────────────────────
   const persistWorking = useCallback(async (): Promise<void> => {
     const currentLines = linesRef.current;
     const currentStandalones = standalonesRef.current;
@@ -335,7 +516,6 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     if (pendingRef.current) await persistWorking();
   }, [persistWorking]);
 
-  // Manual save: write to saved version, delete working version
   const manualSave = useCallback(async () => {
     const currentLines = linesRef.current;
     const currentStandalones = standalonesRef.current;
@@ -349,6 +529,8 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     const finalMarkers = buildFinalMarkers(currentLines, currentStandalones, newBlocks);
     await window.songwriterAPI.arrangementMarkers.replaceAll(svId, finalMarkers);
 
+    await window.songwriterAPI.songVersions.updateMeta(svId, capo, concertKey);
+
     await window.songwriterAPI.songVersions.deleteWorking(songId);
 
     setWorkingVersionId(null);
@@ -356,37 +538,29 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     setIsDirty(false);
     pendingRef.current = false;
     if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
-  }, [songId]);
+  }, [songId, capo, concertKey]);
 
-  // Window blur → flush immediately
   useEffect(() => {
     const onBlur = () => { if (pendingRef.current) flushAutoSave(); };
     window.addEventListener('blur', onBlur);
     return () => window.removeEventListener('blur', onBlur);
   }, [flushAutoSave]);
 
-  // beforeunload → synchronous persist (blocks renderer thread until complete)
   useEffect(() => {
     function onBeforeUnload() {
       if (!pendingRef.current) return;
       const vid = workingVersionIdRef.current;
       const { blocks, inlineMarkers, standaloneMarkers } = buildSyncPayload(
-        linesRef.current,
-        standalonesRef.current
+        linesRef.current, standalonesRef.current
       );
       window.songwriterAPI.songs.persistWorkingSync({
-        versionId: vid,
-        songId,
-        blocks,
-        inlineMarkers,
-        standaloneMarkers,
+        versionId: vid, songId, blocks, inlineMarkers, standaloneMarkers,
       });
     }
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [songId]);
 
-  // Ctrl+S / Cmd+S → manual save
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); manualSave(); }
@@ -395,26 +569,25 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     return () => window.removeEventListener('keydown', onKey);
   }, [manualSave]);
 
-  // Navigate back: flush before leaving
   async function handleBack() {
     await flushAutoSave();
     onBack();
   }
 
-  // ── Edit helpers ──────────────────────────────────────────────────────────
-
-  function markDirty() {
+  // ── Edit helpers ───────────────────────────────────────────────────────────────
+  function markDirty(currentLines?: EditorLine[]) {
     setIsDirty(true);
     scheduleAutoSave();
+    runTriggerChecks(currentLines ?? linesRef.current);
   }
 
   function updateLineContent(index: number, content: string) {
     setLines(prev => {
       const next = prev.map((l, i) => i === index ? { ...l, content } : l);
       linesRef.current = next;
+      markDirty(next);
       return next;
     });
-    markDirty();
   }
 
   function handleLineKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
@@ -445,15 +618,13 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     }
   }
 
-  // ── Chord input ────────────────────────────────────────────────────────────
-
+  // ── Chord input ────────────────────────────────────────────────────────────────
   function handleChordRowClick(lineIndex: number, e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const pos = Math.round(x / charWidth);
 
     if (e.altKey) {
-      // Alt+click → add inline arrangement marker at this character position
       setMarkerInput({ lineIndex, mode: 'inline', charOffset: pos, value: '' });
       return;
     }
@@ -482,7 +653,10 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
       return next;
     });
     setChordInput(null);
-    markDirty();
+    if (trimmed) {
+      markDirty();
+      checkUnknownChord(trimmed, chordInput.lineIndex);
+    }
   }
 
   function handleChordInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -502,8 +676,7 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     }
   }
 
-  // ── Arrangement marker input ───────────────────────────────────────────────
-
+  // ── Arrangement marker input ───────────────────────────────────────────────────
   function commitMarkerInput() {
     if (!markerInput) return;
     const trimmed = markerInput.value.trim();
@@ -550,68 +723,209 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
     markDirty();
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Annotation helpers ───────────────────────────────────────────────────────────
+  function getAnnotationsForLine(lineIndex: number): Array<{ ann: Annotation; startChar: number; endChar: number; color: string | null }> {
+    const prefix = `${lineIndex}:`;
+    return annotations
+      .filter(a => a.targetRange.startsWith(prefix))
+      .map(a => {
+        const parts = a.targetRange.split(':');
+        const startChar = parseInt(parts[1] ?? '0', 10);
+        const endChar = parseInt(parts[2] ?? '0', 10);
+        const tag = tags.find(t => t.id === a.tagId);
+        return { ann: a, startChar, endChar, color: tag?.color ?? null };
+      })
+      .filter(x => !isNaN(x.startChar) && !isNaN(x.endChar) && x.endChar > x.startChar);
+  }
 
+  function handleLyricMouseUp(lineIndex: number, e: React.MouseEvent<HTMLInputElement>) {
+    const input = e.currentTarget;
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    if (end > start) {
+      setSelection({ lineIndex, startChar: start, endChar: end });
+    } else {
+      setSelection(null);
+    }
+  }
+
+  async function openAnnotationForSelection() {
+    if (!selection) return;
+    const { lineIndex, startChar, endChar } = selection;
+    const targetRange = `${lineIndex}:${startChar}:${endChar}`;
+    const existing = await window.songwriterAPI.annotations.getByRange(songId, targetRange);
+    setAnnotationModal({
+      mode: existing ? 'edit' : 'create',
+      lineIndex, startChar, endChar,
+      existing,
+      body: existing?.body ?? '',
+      tagId: existing?.tagId ?? null,
+    });
+    setSelection(null);
+  }
+
+  async function saveAnnotation() {
+    if (!annotationModal) return;
+    const { lineIndex, startChar, endChar, existing, body, tagId } = annotationModal;
+    const targetRange = `${lineIndex}:${startChar}:${endChar}`;
+    const trimmedBody = body.trim();
+    if (!trimmedBody) return;
+
+    if (existing) {
+      await window.songwriterAPI.annotations.update(existing.id, trimmedBody, tagId);
+    } else {
+      await window.songwriterAPI.annotations.create(songId, targetRange, trimmedBody, tagId);
+    }
+    await checkPlaceholderLyric(tagId);
+    setAnnotationModal(null);
+    refreshAnnotations();
+  }
+
+  async function deleteAnnotation() {
+    if (!annotationModal?.existing) return;
+    await window.songwriterAPI.annotations.delete(annotationModal.existing.id);
+    setAnnotationModal(null);
+    refreshAnnotations();
+  }
+
+  function openAnnotationForExisting(ann: Annotation, lineIndex: number, startChar: number, endChar: number) {
+    setAnnotationModal({
+      mode: 'edit',
+      lineIndex, startChar, endChar,
+      existing: ann,
+      body: ann.body,
+      tagId: ann.tagId,
+    });
+  }
+
+  // ── Manual flag ────────────────────────────────────────────────────────────────
+  async function flagLineForReview(lineIndex: number) {
+    const line = linesRef.current[lineIndex];
+    const preview = line.content.substring(0, 40);
+    const msg = `Manual review flag: "${preview}${line.content.length > 40 ? '…' : ''}"`;
+    await window.songwriterAPI.reviewQueue.create(songId, 'manual-flag', msg, String(lineIndex));
+    refreshReviewQueue();
+  }
+
+  // ── Capo / key ─────────────────────────────────────────────────────────────────
+  function handleKeyChange(value: string) {
+    const newKey = value.trim() || null;
+    setConcertKey(newKey);
+    concertKeyRef.current = newKey;
+    setIsDirty(true);
+    scheduleAutoSave();
+    checkAmbiguousTranspose(newKey, linesRef.current);
+  }
+
+  function handleCapoChange(value: string) {
+    const n = parseInt(value, 10);
+    const newCapo = isNaN(n) || value === '' ? null : n;
+    setCapo(newCapo);
+    setIsDirty(true);
+    scheduleAutoSave();
+  }
+
+  // ── Jump to review item ───────────────────────────────────────────────────────────
+  function jumpToReviewTarget(targetId: string | null) {
+    if (!targetId) return;
+    const lineIndex = parseInt(targetId, 10);
+    if (!isNaN(lineIndex) && lineIndex >= 0 && lineIndex < lines.length) {
+      lineRefs.current[lineIndex]?.focus();
+      lineRefs.current[lineIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  // ── Derived values ───────────────────────────────────────────────────────────────
   const firstSectionIndex = lines.findIndex(l => isSectionContent(l.content));
+  const noteCount = notes.length;
+  const queueCount = reviewItems.length;
 
+  const lineContexts = lines.map((l, i) => ({
+    lineIndex: i,
+    content: l.content,
+    isSection: isSectionContent(l.content),
+  }));
+
+  // ── Render ───────────────────────────────────────────────────────────────────────
   return (
     <div style={{ ...s.screen, display: 'flex', flexDirection: 'column' }}>
-      {/* Hidden span — character width measurement */}
+      {/* Hidden char-width measurement span */}
       <span
         ref={measureSpanRef}
         aria-hidden="true"
-        style={{
-          position: 'absolute', visibility: 'hidden', pointerEvents: 'none',
-          fontFamily: LYRIC_FONT, fontSize: LYRIC_SIZE, letterSpacing: 0, whiteSpace: 'pre',
-        }}
+        style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', fontFamily: LYRIC_FONT, fontSize: LYRIC_SIZE, letterSpacing: 0, whiteSpace: 'pre' }}
       >m</span>
 
-      {/* Header: ☰  [•] Title  [Save] */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '10px',
-        padding: '12px 16px',
-        borderBottom: `1px solid ${colors.border}`,
-        background: colors.surface, flexShrink: 0,
-      }}>
+      {/* ── Header ──────────────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', borderBottom: `1px solid ${colors.border}`, background: colors.surface, flexShrink: 0, position: 'relative' }}>
+        {/* Hamburger */}
         <span
-          style={{ fontSize: '18px', cursor: 'pointer', color: colors.textSecondary }}
-          onClick={handleBack}
+          style={{ fontSize: '18px', cursor: 'pointer', color: colors.textSecondary, userSelect: 'none' }}
+          onClick={() => setShowHamburger(h => !h)}
         >☰</span>
+
+        {/* Hamburger dropdown */}
+        {showHamburger && (
+          <>
+            <div style={{ position: 'fixed', inset: 0, zIndex: 50 }} onClick={() => setShowHamburger(false)} />
+            <div style={{ position: 'absolute', top: '40px', left: '12px', zIndex: 51, background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '6px', minWidth: '160px', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+              <div
+                onClick={() => { setShowHamburger(false); handleBack(); }}
+                style={{ padding: '9px 14px', color: colors.text, fontSize: '13px', cursor: 'pointer' }}
+                onMouseEnter={e => (e.currentTarget.style.background = colors.surfaceHover)}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >Home</div>
+              <div
+                onClick={() => { setShowHamburger(false); setShowSettings(true); }}
+                style={{ padding: '9px 14px', color: colors.text, fontSize: '13px', cursor: 'pointer' }}
+                onMouseEnter={e => (e.currentTarget.style.background = colors.surfaceHover)}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >Settings</div>
+            </div>
+          </>
+        )}
+
         {isDirty && (
           <span style={{ color: colors.accent, fontSize: '18px', lineHeight: 1, userSelect: 'none' }}>•</span>
         )}
         <span style={{ fontWeight: 600, color: colors.text, flex: 1 }}>{song?.title ?? '…'}</span>
         <button
           onClick={manualSave}
-          style={{
-            background: 'transparent', border: `1px solid ${colors.border}`,
-            color: colors.textSecondary, fontSize: '12px', cursor: 'pointer',
-            padding: '3px 10px', borderRadius: '3px',
-          }}
+          style={{ background: 'transparent', border: `1px solid ${colors.border}`, color: colors.textSecondary, fontSize: '12px', cursor: 'pointer', padding: '3px 10px', borderRadius: '3px' }}
         >Save</button>
       </div>
 
-      {/* Arrangement marker input dialog */}
+      {/* Capo / key row */}
+      <div style={{ display: 'flex', gap: '16px', padding: '6px 16px', background: colors.surface, borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: colors.textSecondary }}>
+          Capo
+          <input
+            type="number"
+            min={0} max={12}
+            value={capo ?? ''}
+            onChange={e => handleCapoChange(e.target.value)}
+            placeholder="—"
+            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${colors.border}`, color: colors.text, fontSize: '12px', width: '36px', outline: 'none', textAlign: 'center', padding: '1px 0' }}
+          />
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: colors.textSecondary }}>
+          Key
+          <input
+            type="text"
+            value={concertKey ?? ''}
+            onChange={e => handleKeyChange(e.target.value)}
+            placeholder="—"
+            style={{ background: 'transparent', border: 'none', borderBottom: `1px solid ${colors.border}`, color: colors.text, fontSize: '12px', width: '48px', outline: 'none', padding: '1px 0' }}
+          />
+        </label>
+      </div>
+
+      {/* ── Arrangement marker dialog ─────────────────────────────────────────────────── */}
       {markerInput && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, zIndex: 100,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.45)',
-          }}
-          onClick={() => setMarkerInput(null)}
-        >
-          <div
-            style={{
-              background: colors.surface, border: `1px solid ${colors.border}`,
-              borderRadius: '6px', padding: '16px 20px', minWidth: '300px',
-            }}
-            onClick={e => e.stopPropagation()}
-          >
+        <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)' }} onClick={() => setMarkerInput(null)}>
+          <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '16px 20px', minWidth: '300px' }} onClick={e => e.stopPropagation()}>
             <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              {markerInput.mode === 'inline'
-                ? `Inline marker at char ${markerInput.charOffset}`
-                : 'Standalone marker'}
+              {markerInput.mode === 'inline' ? `Inline marker at char ${markerInput.charOffset}` : 'Standalone marker'}
             </div>
             <input
               autoFocus
@@ -622,191 +936,299 @@ export function EditorScreen({ songId, onBack }: Props): React.ReactElement {
                 if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commitMarkerInput(); }
                 else if (e.key === 'Escape') setMarkerInput(null);
               }}
-              style={{
-                display: 'block', width: '100%', boxSizing: 'border-box',
-                background: colors.bg, border: `1px solid ${colors.border}`,
-                color: colors.text, fontSize: '13px', fontFamily: 'sans-serif',
-                padding: '6px 8px', borderRadius: '3px', outline: 'none',
-              }}
+              style={{ display: 'block', width: '100%', boxSizing: 'border-box', background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text, fontSize: '13px', fontFamily: 'sans-serif', padding: '6px 8px', borderRadius: '3px', outline: 'none' }}
             />
             <div style={{ marginTop: '12px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setMarkerInput(null)}
-                style={{ background: 'transparent', border: `1px solid ${colors.border}`, color: colors.textSecondary, fontSize: '12px', cursor: 'pointer', padding: '4px 12px', borderRadius: '3px' }}
-              >Cancel</button>
-              <button
-                onClick={commitMarkerInput}
-                style={{ background: colors.accent, border: 'none', color: '#fff', fontSize: '12px', cursor: 'pointer', padding: '4px 14px', borderRadius: '3px' }}
-              >Add</button>
+              <button onClick={() => setMarkerInput(null)} style={{ background: 'transparent', border: `1px solid ${colors.border}`, color: colors.textSecondary, fontSize: '12px', cursor: 'pointer', padding: '4px 12px', borderRadius: '3px' }}>Cancel</button>
+              <button onClick={commitMarkerInput} style={{ background: colors.accent, border: 'none', color: '#fff', fontSize: '12px', cursor: 'pointer', padding: '4px 14px', borderRadius: '3px' }}>Add</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Editor canvas */}
-      <div
-        style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}
-        onClick={() => {
-          if (document.activeElement?.tagName !== 'INPUT') {
-            lineRefs.current[lines.length - 1]?.focus();
-          }
-        }}
-      >
-        {lines.map((line, index) => {
-          const isSecLine = isSectionContent(line.content);
-          const needsBlankAbove = isSecLine && index !== firstSectionIndex;
-          const lineStandalones = standalones.filter(m => m.afterLineIndex === index);
+      {/* ── Annotation modal ─────────────────────────────────────────────────────────── */}
+      {annotationModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)' }} onClick={() => setAnnotationModal(null)}>
+          <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '6px', padding: '16px 20px', minWidth: '320px', maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {annotationModal.mode === 'edit' ? 'Edit Annotation' : 'New Annotation'}
+            </div>
+            <textarea
+              autoFocus
+              value={annotationModal.body}
+              onChange={e => setAnnotationModal({ ...annotationModal, body: e.target.value })}
+              placeholder="Annotation note…"
+              rows={3}
+              style={{ display: 'block', width: '100%', boxSizing: 'border-box', background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text, fontSize: '13px', fontFamily: 'inherit', padding: '6px 8px', borderRadius: '3px', outline: 'none', resize: 'vertical' }}
+            />
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ color: colors.textSecondary, fontSize: '11px', marginBottom: '4px' }}>Tag (optional)</div>
+              <select
+                value={annotationModal.tagId ?? ''}
+                onChange={e => setAnnotationModal({ ...annotationModal, tagId: e.target.value || null })}
+                style={{ background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text, fontSize: '12px', padding: '4px 6px', borderRadius: '3px', outline: 'none', width: '100%' }}
+              >
+                <option value="">None</option>
+                {tags.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}{t.createsReviewItem ? ' (RQ)' : ''}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ marginTop: '12px', display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+              {annotationModal.mode === 'edit' && (
+                <button onClick={deleteAnnotation} style={{ background: 'transparent', border: `1px solid ${colors.danger}`, color: colors.danger, fontSize: '12px', cursor: 'pointer', padding: '4px 12px', borderRadius: '3px', marginRight: 'auto' }}>Delete</button>
+              )}
+              <button onClick={() => setAnnotationModal(null)} style={{ background: 'transparent', border: `1px solid ${colors.border}`, color: colors.textSecondary, fontSize: '12px', cursor: 'pointer', padding: '4px 12px', borderRadius: '3px' }}>Cancel</button>
+              <button onClick={saveAnnotation} style={{ background: colors.accent, border: 'none', color: '#fff', fontSize: '12px', cursor: 'pointer', padding: '4px 14px', borderRadius: '3px' }}>
+                {annotationModal.mode === 'edit' ? 'Update' : 'Add'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-          return (
-            <React.Fragment key={line.id}>
-              {needsBlankAbove && <div style={{ height: '1em' }} />}
+      {/* ── Settings / ManageTags modals ─────────────────────────────────────────────────── */}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onManageTags={() => { setShowSettings(false); setShowManageTags(true); }}
+        />
+      )}
+      {showManageTags && (
+        <ManageTagsModal
+          tags={tags}
+          onClose={() => setShowManageTags(false)}
+          onTagsChanged={refreshTags}
+        />
+      )}
 
-              {isSecLine ? (
-                // ── Section tag ──────────────────────────────────────────
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <input
-                    ref={el => { lineRefs.current[index] = el; }}
-                    value={line.content}
-                    onChange={e => updateLineContent(index, e.target.value)}
-                    onKeyDown={e => handleLineKeyDown(index, e)}
-                    style={{
-                      flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                      fontFamily: LYRIC_FONT, fontSize: LYRIC_SIZE,
-                      fontWeight: 700, color: colors.accent, padding: 0, lineHeight: '1.6',
-                    }}
-                  />
-                  <span
-                    title="Add standalone marker after this line"
-                    style={{ color: colors.textSecondary, fontSize: '11px', cursor: 'pointer', paddingLeft: '8px', flexShrink: 0 }}
-                    onClick={() => setMarkerInput({ lineIndex: index, mode: 'standalone', charOffset: 0, value: '' })}
-                  >+M</span>
-                </div>
-              ) : (
-                // ── Lyric line with chord row ──────────────────────────────
-                <div>
-                  {/* Chord row — click: add chord • Alt+click: add inline marker */}
-                  <div
-                    style={{ position: 'relative', height: `${CHORD_ROW_HEIGHT}px`, cursor: 'text', userSelect: 'none' }}
-                    title="Click: add chord  •  Alt+click: add inline marker"
-                    onClick={e => handleChordRowClick(index, e)}
-                  >
-                    {line.chords.map(({ chord, pos }) => (
-                      <span
-                        key={pos}
-                        style={{
-                          position: 'absolute', left: Math.round(pos * charWidth),
-                          fontFamily: LYRIC_FONT, fontSize: CHORD_SIZE,
-                          color: colors.accent, fontWeight: 600,
-                          lineHeight: `${CHORD_ROW_HEIGHT}px`, cursor: 'text',
-                        }}
-                        onClick={e => {
-                          e.stopPropagation();
-                          setChordInput({ lineIndex: index, pos, value: chord, isEdit: true });
-                        }}
-                      >{chord}</span>
-                    ))}
-                    {chordInput?.lineIndex === index && (
-                      <input
-                        autoFocus
-                        value={chordInput.value}
-                        onChange={e => setChordInput({ ...chordInput, value: e.target.value })}
-                        onKeyDown={handleChordInputKeyDown}
-                        onBlur={commitChordInput}
-                        onClick={e => e.stopPropagation()}
-                        style={{
-                          position: 'absolute', left: Math.round(chordInput.pos * charWidth),
-                          top: 1, width: 64, height: CHORD_ROW_HEIGHT - 2,
-                          background: colors.surface, border: `1px solid ${colors.accent}`,
-                          color: colors.text, fontFamily: LYRIC_FONT, fontSize: CHORD_SIZE,
-                          padding: '0 3px', outline: 'none', zIndex: 1,
-                        }}
-                      />
-                    )}
-                  </div>
+      {/* ── Annotation tooltip ─────────────────────────────────────────────────────────────── */}
+      {annTooltip && (
+        <div style={{ position: 'fixed', left: annTooltip.x + 12, top: annTooltip.y - 4, zIndex: 200, background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: '4px', padding: '4px 8px', maxWidth: '240px', fontSize: '12px', color: colors.text, pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}>
+          {annTooltip.text}
+        </div>
+      )}
 
-                  {/* Lyric row with inline marker badges */}
-                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    {line.inlineMarkers.map(m => (
-                      <span
-                        key={m.charOffset}
-                        title={`Marker: "${m.text}" — click to remove`}
-                        onClick={() => removeInlineMarker(index, m.charOffset)}
-                        style={{
-                          position: 'absolute',
-                          left: Math.round(m.charOffset * charWidth),
-                          bottom: 0,
-                          background: '#2d3a1e', color: '#8fc46a',
-                          border: '1px solid #4a6830',
-                          borderRadius: '3px', fontSize: '10px', fontFamily: 'sans-serif',
-                          padding: '0 4px', lineHeight: '14px',
-                          cursor: 'pointer', zIndex: 1, pointerEvents: 'all',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >◆ {m.text}</span>
-                    ))}
+      {/* ── Body: canvas + optional side panel ───────────────────────────────────────── */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+
+        {/* Canvas */}
+        <div
+          style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', minWidth: 0 }}
+          onClick={() => {
+            if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+              lineRefs.current[lines.length - 1]?.focus();
+            }
+          }}
+        >
+          {/* Annotate button (appears when text is selected) */}
+          {selection && (
+            <div style={{ marginBottom: '8px' }}>
+              <button
+                onClick={openAnnotationForSelection}
+                style={{ background: colors.accent, border: 'none', color: '#fff', fontSize: '11px', cursor: 'pointer', padding: '3px 10px', borderRadius: '3px' }}
+              >📌 Annotate selection (line {selection.lineIndex}, chars {selection.startChar}–{selection.endChar})</button>
+              <span
+                onClick={() => setSelection(null)}
+                style={{ marginLeft: '6px', color: colors.textSecondary, fontSize: '11px', cursor: 'pointer' }}
+              >✕</span>
+            </div>
+          )}
+
+          {lines.map((line, index) => {
+            const isSecLine = isSectionContent(line.content);
+            const needsBlankAbove = isSecLine && index !== firstSectionIndex;
+            const lineStandalones = standalones.filter(m => m.afterLineIndex === index);
+            const lineAnns = isSecLine ? [] : getAnnotationsForLine(index);
+
+            return (
+              <React.Fragment key={line.id}>
+                {needsBlankAbove && <div style={{ height: '1em' }} />}
+
+                {isSecLine ? (
+                  // ── Section tag ────────────────────────────────────────────────────────
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
                     <input
                       ref={el => { lineRefs.current[index] = el; }}
                       value={line.content}
                       onChange={e => updateLineContent(index, e.target.value)}
                       onKeyDown={e => handleLineKeyDown(index, e)}
-                      style={{
-                        flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                        fontFamily: LYRIC_FONT, fontSize: LYRIC_SIZE,
-                        color: colors.text, padding: 0, lineHeight: '1.6',
-                      }}
+                      onFocus={() => setFocusedLineIndex(index)}
+                      style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontFamily: LYRIC_FONT, fontSize: LYRIC_SIZE, fontWeight: 700, color: colors.accent, padding: 0, lineHeight: '1.6' }}
                     />
                     <span
                       title="Add standalone marker after this line"
-                      style={{ color: colors.textSecondary, fontSize: '11px', cursor: 'pointer', paddingLeft: '8px', flexShrink: 0 }}
+                      style={{ color: colors.textSecondary, fontSize: '11px', cursor: 'pointer', paddingLeft: '6px', flexShrink: 0 }}
                       onClick={() => setMarkerInput({ lineIndex: index, mode: 'standalone', charOffset: 0, value: '' })}
                     >+M</span>
+                    <span
+                      title="Flag for review"
+                      style={{ color: colors.textSecondary, fontSize: '11px', cursor: 'pointer', paddingLeft: '6px', flexShrink: 0 }}
+                      onClick={() => flagLineForReview(index)}
+                    >⚑</span>
                   </div>
-                </div>
-              )}
+                ) : (
+                  // ── Lyric line with chord row ───────────────────────────────────────────────
+                  <div>
+                    {/* Chord row */}
+                    <div
+                      style={{ position: 'relative', height: `${CHORD_ROW_HEIGHT}px`, cursor: 'text', userSelect: 'none' }}
+                      title="Click: add chord  •  Alt+click: add inline marker"
+                      onClick={e => handleChordRowClick(index, e)}
+                    >
+                      {line.chords.map(({ chord, pos }) => (
+                        <span
+                          key={pos}
+                          style={{ position: 'absolute', left: Math.round(pos * charWidth), fontFamily: LYRIC_FONT, fontSize: CHORD_SIZE, color: colors.accent, fontWeight: 600, lineHeight: `${CHORD_ROW_HEIGHT}px`, cursor: 'text' }}
+                          onClick={e => { e.stopPropagation(); setChordInput({ lineIndex: index, pos, value: chord, isEdit: true }); }}
+                        >{chord}</span>
+                      ))}
+                      {chordInput?.lineIndex === index && (
+                        <input
+                          autoFocus
+                          value={chordInput.value}
+                          onChange={e => setChordInput({ ...chordInput, value: e.target.value })}
+                          onKeyDown={handleChordInputKeyDown}
+                          onBlur={commitChordInput}
+                          onClick={e => e.stopPropagation()}
+                          style={{ position: 'absolute', left: Math.round(chordInput.pos * charWidth), top: 1, width: 64, height: CHORD_ROW_HEIGHT - 2, background: colors.surface, border: `1px solid ${colors.accent}`, color: colors.text, fontFamily: LYRIC_FONT, fontSize: CHORD_SIZE, padding: '0 3px', outline: 'none', zIndex: 1 }}
+                        />
+                      )}
+                    </div>
 
-              {/* Standalone markers after this line */}
-              {lineStandalones.map(m => (
-                <div
-                  key={m.id || `${m.afterLineIndex}-${m.text}`}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '6px',
-                    margin: '2px 0',
-                    background: '#1e2a3a', color: '#6aaed4',
-                    border: '1px solid #2a4a6a',
-                    borderRadius: '4px', fontSize: '11px', fontFamily: 'sans-serif',
-                    padding: '2px 8px',
-                  }}
-                >
-                  <span>◆ {m.text}</span>
-                  <span
-                    onClick={() => removeStandaloneMarker(m)}
-                    style={{ cursor: 'pointer', color: colors.textSecondary, fontSize: '12px' }}
-                  >×</span>
-                </div>
-              ))}
-            </React.Fragment>
-          );
-        })}
+                    {/* Lyric row with inline markers + annotation underlines */}
+                    <div
+                      style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+                      onMouseMove={e => {
+                        if (lineAnns.length === 0) { setAnnTooltip(null); return; }
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const charPos = Math.floor(x / charWidth);
+                        const hit = lineAnns.find(a => a.startChar <= charPos && charPos < a.endChar);
+                        if (hit) setAnnTooltip({ text: hit.ann.body, x: e.clientX, y: e.clientY });
+                        else setAnnTooltip(null);
+                      }}
+                      onMouseLeave={() => setAnnTooltip(null)}
+                    >
+                      {/* Annotation underlines */}
+                      {lineAnns.map(({ ann, startChar, endChar, color }) => (
+                        <div
+                          key={ann.id}
+                          onClick={() => openAnnotationForExisting(ann, index, startChar, endChar)}
+                          style={{ position: 'absolute', left: Math.round(startChar * charWidth), width: Math.round((endChar - startChar) * charWidth), bottom: 1, height: 2, background: color ?? '#888', cursor: 'pointer', zIndex: 0, pointerEvents: 'all' }}
+                        />
+                      ))}
+                      {/* Inline marker badges */}
+                      {line.inlineMarkers.map(m => (
+                        <span
+                          key={m.charOffset}
+                          title={`Marker: "${m.text}" — click to remove`}
+                          onClick={() => removeInlineMarker(index, m.charOffset)}
+                          style={{ position: 'absolute', left: Math.round(m.charOffset * charWidth), bottom: 0, background: '#2d3a1e', color: '#8fc46a', border: '1px solid #4a6830', borderRadius: '3px', fontSize: '10px', fontFamily: 'sans-serif', padding: '0 4px', lineHeight: '14px', cursor: 'pointer', zIndex: 1, pointerEvents: 'all', whiteSpace: 'nowrap' }}
+                        >◆ {m.text}</span>
+                      ))}
+                      {/* Lyric input */}
+                      <input
+                        ref={el => { lineRefs.current[index] = el; }}
+                        value={line.content}
+                        onChange={e => updateLineContent(index, e.target.value)}
+                        onKeyDown={e => handleLineKeyDown(index, e)}
+                        onFocus={() => setFocusedLineIndex(index)}
+                        onMouseUp={e => handleLyricMouseUp(index, e)}
+                        style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontFamily: LYRIC_FONT, fontSize: LYRIC_SIZE, color: colors.text, padding: 0, lineHeight: '1.6', position: 'relative', zIndex: 1 }}
+                      />
+                      <span
+                        title="Add standalone marker after this line"
+                        style={{ color: colors.textSecondary, fontSize: '11px', cursor: 'pointer', paddingLeft: '6px', flexShrink: 0 }}
+                        onClick={() => setMarkerInput({ lineIndex: index, mode: 'standalone', charOffset: 0, value: '' })}
+                      >+M</span>
+                      <span
+                        title="Flag for review"
+                        style={{ color: colors.textSecondary, fontSize: '11px', cursor: 'pointer', paddingLeft: '4px', flexShrink: 0 }}
+                        onClick={() => flagLineForReview(index)}
+                      >⚑</span>
+                    </div>
+                  </div>
+                )}
 
-        {/* Bottom area: click to add/focus last line */}
-        <div
-          style={{ height: '120px' }}
-          onClick={e => {
-            e.stopPropagation();
-            const last = lines[lines.length - 1];
-            if (last.content === '') {
-              lineRefs.current[lines.length - 1]?.focus();
-            } else {
-              const next = newLine();
-              setLines(prev => {
-                const updated = [...prev, next];
-                linesRef.current = updated;
-                return updated;
-              });
-              setTimeout(() => lineRefs.current[lines.length]?.focus(), 0);
-            }
-          }}
-        />
+                {/* Standalone markers after this line */}
+                {lineStandalones.map(m => (
+                  <div
+                    key={m.id || `${m.afterLineIndex}-${m.text}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', margin: '2px 0', background: '#1e2a3a', color: '#6aaed4', border: '1px solid #2a4a6a', borderRadius: '4px', fontSize: '11px', fontFamily: 'sans-serif', padding: '2px 8px' }}
+                  >
+                    <span>◆ {m.text}</span>
+                    <span onClick={() => removeStandaloneMarker(m)} style={{ cursor: 'pointer', color: colors.textSecondary, fontSize: '12px' }}>&times;</span>
+                  </div>
+                ))}
+              </React.Fragment>
+            );
+          })}
+
+          {/* Bottom click area */}
+          <div
+            style={{ height: '120px' }}
+            onClick={e => {
+              e.stopPropagation();
+              const last = lines[lines.length - 1];
+              if (last.content === '') {
+                lineRefs.current[lines.length - 1]?.focus();
+              } else {
+                const next = newLine();
+                setLines(prev => {
+                  const updated = [...prev, next];
+                  linesRef.current = updated;
+                  return updated;
+                });
+                setTimeout(() => lineRefs.current[lines.length]?.focus(), 0);
+              }
+            }}
+          />
+        </div>
+
+        {/* ── Side panel ──────────────────────────────────────────────────────────────────── */}
+        {activePanel === 'notes' && (
+          <NotesSidePanel
+            songId={songId}
+            notes={notes}
+            lines={lineContexts}
+            focusedLineIndex={focusedLineIndex}
+            onClose={() => setActivePanel(null)}
+            onNotesChanged={refreshNotes}
+          />
+        )}
+        {activePanel === 'reviewQueue' && (
+          <ReviewQueuePanel
+            items={reviewItems}
+            onClose={() => setActivePanel(null)}
+            onItemsChanged={refreshReviewQueue}
+            onJumpTo={jumpToReviewTarget}
+          />
+        )}
+      </div>
+
+      {/* ── Bottom-right utility icons ───────────────────────────────────────────────────────── */}
+      <div style={{ position: 'fixed', bottom: '20px', right: '20px', display: 'flex', flexDirection: 'column', gap: '8px', zIndex: 40 }}>
+        {noteCount > 0 && (
+          <button
+            onClick={() => setActivePanel(p => p === 'notes' ? null : 'notes')}
+            title="Song Notes"
+            style={{ background: activePanel === 'notes' ? colors.accent : colors.surface, border: `1px solid ${activePanel === 'notes' ? colors.accent : colors.border}`, color: activePanel === 'notes' ? '#fff' : colors.textSecondary, borderRadius: '50%', width: '40px', height: '40px', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
+          >
+            📝
+            <span style={{ position: 'absolute', top: '-4px', right: '-4px', background: colors.accent, color: '#fff', fontSize: '10px', borderRadius: '50%', width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{noteCount}</span>
+          </button>
+        )}
+        {queueCount > 0 && (
+          <button
+            onClick={() => setActivePanel(p => p === 'reviewQueue' ? null : 'reviewQueue')}
+            title="Review Queue"
+            style={{ background: activePanel === 'reviewQueue' ? colors.accent : colors.surface, border: `1px solid ${activePanel === 'reviewQueue' ? colors.accent : colors.border}`, color: activePanel === 'reviewQueue' ? '#fff' : colors.textSecondary, borderRadius: '50%', width: '40px', height: '40px', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
+          >
+            ⚠
+            <span style={{ position: 'absolute', top: '-4px', right: '-4px', background: colors.danger, color: '#fff', fontSize: '10px', borderRadius: '50%', width: '16px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{queueCount}</span>
+          </button>
+        )}
       </div>
     </div>
   );
